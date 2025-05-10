@@ -1,0 +1,23 @@
+ModuleName: Wireguard
+ApiNamespace: randalljohnson.us
+ApiDocs:
+  Title: Wireguard Threeport API
+  Description: API server for the Threeport Wireguard module.
+  ContactName: Randall Johnson
+  ContactEmail: rj9317@gmail.com
+ImageRepo: docker.io/rj9317/wireguard-threeport-module
+ApiObjectGroups:
+- Name: wireguard
+  Objects:
+    - Name: WireguardDefinition
+      Versions:
+        - v0
+      Reconcilable: true
+      Tptctl:
+        Enabled: true
+    - Name: WireguardInstance
+      Versions:
+        - v0
+      Reconcilable: true
+      Tptctl:
+        Enabled: true
