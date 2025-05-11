@@ -43,7 +43,6 @@ func getHelmValues() map[string]interface{} {
 			},
 			"data": map[string]interface{}{
 				"wg0.conf": `[Interface]
-PrivateKeyFile = /data/wireguard/private.key
 Address = 10.11.12.1/24 ## TODO: should be a variable, not possible without orchestration layer
 ListenPort = 51820
 MTU = 1420
@@ -139,7 +138,8 @@ $IPT -I INPUT 1 -i $IN_FACE -p udp --dport $WG_PORT -j ACCEPT
 					"-c",
 					`sysctl -w net.ipv4.conf.all.forwarding=1 &&
 sh -c /data/iptables/add-nat-routing.sh &&
-wg-quick up /data/wireguard/wg0.conf
+wg-quick up /data/wireguard/wg0.conf &&
+wg load /data/wireguard/privatekey
 `,
 				},
 				"image":           "ghcr.io/h44z/wg-portal:v2",

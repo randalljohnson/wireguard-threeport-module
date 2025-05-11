@@ -4,11 +4,12 @@ package v0
 
 import (
 	"fmt"
+	"net/http"
+
 	api_v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/api/v0"
 	client_v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/client/v0"
 	tpapi_v0 "github.com/threeport/threeport/pkg/api/v0"
 	util "github.com/threeport/threeport/pkg/util/v0"
-	"net/http"
 )
 
 // WireguardConfig contains the config for a wireguard which is an abstraction
@@ -38,7 +39,7 @@ func (w *WireguardValues) Create(
 	if err := operations.Create(); err != nil {
 		return nil, nil, fmt.Errorf(
 			"failed to execute create operations for wireguard defined instance with name %s: %w",
-			w.Name,
+			*w.Name,
 			err,
 		)
 	}
@@ -61,7 +62,7 @@ func (w *WireguardValues) Delete(
 	if err := operations.Delete(); err != nil {
 		return nil, nil, fmt.Errorf(
 			"failed to execute delete operations for wireguard defined instance with name %s: %w",
-			w.Name,
+			*w.Name,
 			err,
 		)
 	}
@@ -89,7 +90,7 @@ func (w *WireguardValues) GetOperations(
 		Create: func() error {
 			wireguardDefinition, err := wireguardDefinitionValues.Create(apiClient, apiEndpoint)
 			if err != nil {
-				return fmt.Errorf("failed to create wireguard definition with name %s: %w", w.Name, err)
+				return fmt.Errorf("failed to create wireguard definition with name %s: %w", *w.Name, err)
 			}
 			createdWireguardDefinition = *wireguardDefinition
 			return nil
@@ -97,7 +98,7 @@ func (w *WireguardValues) GetOperations(
 		Delete: func() error {
 			_, err = wireguardDefinitionValues.Delete(apiClient, apiEndpoint)
 			if err != nil {
-				return fmt.Errorf("failed to delete wireguard definition with name %s: %w", w.Name, err)
+				return fmt.Errorf("failed to delete wireguard definition with name %s: %w", *w.Name, err)
 			}
 			return nil
 		},
@@ -112,7 +113,7 @@ func (w *WireguardValues) GetOperations(
 		Create: func() error {
 			wireguardInstance, err := wireguardInstanceValues.Create(apiClient, apiEndpoint)
 			if err != nil {
-				return fmt.Errorf("failed to create wireguard instance with name %s: %w", w.Name, err)
+				return fmt.Errorf("failed to create wireguard instance with name %s: %w", *w.Name, err)
 			}
 			createdWireguardInstance = *wireguardInstance
 			return nil
@@ -120,7 +121,7 @@ func (w *WireguardValues) GetOperations(
 		Delete: func() error {
 			_, err = wireguardInstanceValues.Delete(apiClient, apiEndpoint)
 			if err != nil {
-				return fmt.Errorf("failed to delete wireguard instance with name %s: %w", w.Name, err)
+				return fmt.Errorf("failed to delete wireguard instance with name %s: %w", *w.Name, err)
 			}
 			return nil
 		},
@@ -181,7 +182,7 @@ func (w *WireguardDefinitionValues) Delete(
 		*w.Name,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find wireguard definition with name %s: %w", w.Name, err)
+		return nil, fmt.Errorf("failed to find wireguard definition with name %s: %w", *w.Name, err)
 	}
 
 	// delete wireguard definition
@@ -248,7 +249,7 @@ func (w *WireguardInstanceValues) Delete(
 		*w.Name,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find wireguard instance with name %s: %w", w.Name, err)
+		return nil, fmt.Errorf("failed to find wireguard instance with name %s: %w", *w.Name, err)
 	}
 
 	// delete wireguard instance

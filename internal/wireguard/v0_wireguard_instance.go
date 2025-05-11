@@ -3,9 +3,15 @@
 package wireguard
 
 import (
+	"fmt"
+
 	logr "github.com/go-logr/logr"
 	v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/api/v0"
+	tpclient_v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/client/v0"
+	tpapi_v0 "github.com/threeport/threeport/pkg/api/v0"
+	helmclient_v0 "github.com/threeport/threeport/pkg/client/v0"
 	controller "github.com/threeport/threeport/pkg/controller/v0"
+	"gopkg.in/yaml.v3"
 )
 
 // v0WireguardInstanceCreated performs reconciliation when a v0 WireguardInstance
@@ -15,6 +21,37 @@ func v0WireguardInstanceCreated(
 	wireguardInstance *v0.WireguardInstance,
 	log *logr.Logger,
 ) (int64, error) {
+	// Get the associated WireguardDefinition
+	wireguardDef, err := tpclient_v0.GetWireguardDefinitionByID(r.APIClient, r.APIServer, *wireguardInstance.WireguardDefinitionID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get WireguardDefinition: %w", err)
+	}
+
+	// Marshal the Helm values to YAML
+	valuesYAML, err := yaml.Marshal(getHelmValues())
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	}
+	valuesStr := string(valuesYAML)
+
+	// Create HelmWorkloadInstance for wg-portal
+	helmWorkloadInst := &tpapi_v0.HelmWorkloadInstance{
+		Instance: tpapi_v0.Instance{
+			Name: wireguardInstance.Name,
+		},
+		HelmWorkloadDefinitionID: wireguardDef.ID,
+		ValuesDocument:           &valuesStr,
+	}
+
+	// Create the HelmWorkloadInstance using the client
+	createdInst, err := helmclient_v0.CreateHelmWorkloadInstance(r.APIClient, r.APIServer, helmWorkloadInst)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create HelmWorkloadInstance: %w", err)
+	}
+
+	// Optionally, you can log or use the created instance
+	log.Info("created HelmWorkloadInstance", "name", createdInst.Name)
+
 	return 0, nil
 }
 
@@ -25,6 +62,31 @@ func v0WireguardInstanceUpdated(
 	wireguardInstance *v0.WireguardInstance,
 	log *logr.Logger,
 ) (int64, error) {
+	// Get the associated HelmWorkloadInstance by name
+	helmWorkloadInst, err := helmclient_v0.GetHelmWorkloadInstanceByName(r.APIClient, r.APIServer, *wireguardInstance.Name)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get HelmWorkloadInstance: %w", err)
+	}
+
+	// Marshal the Helm values to YAML
+	valuesYAML, err := yaml.Marshal(getHelmValues())
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	}
+	valuesStr := string(valuesYAML)
+
+	// Update the HelmWorkloadInstance values
+	helmWorkloadInst.ValuesDocument = &valuesStr
+
+	// Update the HelmWorkloadInstance using the client
+	updatedInst, err := helmclient_v0.UpdateHelmWorkloadInstance(r.APIClient, r.APIServer, helmWorkloadInst)
+	if err != nil {
+		return 0, fmt.Errorf("failed to update HelmWorkloadInstance: %w", err)
+	}
+
+	// Optionally, you can log or use the updated instance
+	log.Info("updated HelmWorkloadInstance", "name", updatedInst.Name)
+
 	return 0, nil
 }
 
@@ -35,5 +97,20 @@ func v0WireguardInstanceDeleted(
 	wireguardInstance *v0.WireguardInstance,
 	log *logr.Logger,
 ) (int64, error) {
+	// Get the associated HelmWorkloadInstance by name
+	helmWorkloadInst, err := helmclient_v0.GetHelmWorkloadInstanceByName(r.APIClient, r.APIServer, *wireguardInstance.Name)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get HelmWorkloadInstance: %w", err)
+	}
+
+	// Delete the HelmWorkloadInstance using the client
+	_, err = helmclient_v0.DeleteHelmWorkloadInstance(r.APIClient, r.APIServer, *helmWorkloadInst.ID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete HelmWorkloadInstance: %w", err)
+	}
+
+	// Optionally, you can log the deletion
+	log.Info("deleted HelmWorkloadInstance", "name", helmWorkloadInst.Name)
+
 	return 0, nil
 }
