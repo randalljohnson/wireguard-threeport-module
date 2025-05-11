@@ -3,9 +3,15 @@
 package wireguard
 
 import (
+	"fmt"
+
 	logr "github.com/go-logr/logr"
 	v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/api/v0"
+	tpapi_v0 "github.com/threeport/threeport/pkg/api/v0"
+	tpclient_v0 "github.com/threeport/threeport/pkg/client/v0"
 	controller "github.com/threeport/threeport/pkg/controller/v0"
+	util "github.com/threeport/threeport/pkg/util/v0"
+	"gopkg.in/yaml.v3"
 )
 
 // v0WireguardDefinitionCreated performs reconciliation when a v0 WireguardDefinition
@@ -15,6 +21,33 @@ func v0WireguardDefinitionCreated(
 	wireguardDefinition *v0.WireguardDefinition,
 	log *logr.Logger,
 ) (int64, error) {
+	// Marshal the Helm values to YAML
+	valuesYAML, err := yaml.Marshal(getHelmValues())
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	}
+	valuesStr := string(valuesYAML)
+
+	// Create HelmWorkloadDefinition for wg-portal
+	helmWorkloadDef := &tpapi_v0.HelmWorkloadDefinition{
+		Definition: tpapi_v0.Definition{
+			Name: wireguardDefinition.Name,
+		},
+		Repo:           util.Ptr("oci://ghcr.io/h44z/charts/wg-portal"),
+		Chart:          util.Ptr("wg-portal"),
+		ChartVersion:   util.Ptr("latest"),
+		ValuesDocument: &valuesStr,
+	}
+
+	// Create the HelmWorkloadDefinition using the client
+	createdDef, err := tpclient_v0.CreateHelmWorkloadDefinition(r.APIClient, r.APIServer, helmWorkloadDef)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create HelmWorkloadDefinition: %w", err)
+	}
+
+	// Optionally, you can log or use the created definition
+	log.Info("created HelmWorkloadDefinition", "name", createdDef.Name)
+
 	return 0, nil
 }
 
@@ -25,6 +58,34 @@ func v0WireguardDefinitionUpdated(
 	wireguardDefinition *v0.WireguardDefinition,
 	log *logr.Logger,
 ) (int64, error) {
+	// Marshal the Helm values to YAML
+	valuesYAML, err := yaml.Marshal(getHelmValues())
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	}
+	valuesStr := string(valuesYAML)
+
+	// Get the associated HelmWorkloadDefinition by name
+	helmWorkloadDef, err := tpclient_v0.GetHelmWorkloadDefinitionByName(r.APIClient, r.APIServer, *wireguardDefinition.Name)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get HelmWorkloadDefinition: %w", err)
+	}
+
+	// Update the HelmWorkloadDefinition
+	helmWorkloadDef.Repo = util.Ptr("oci://ghcr.io/h44z/charts/wg-portal")
+	helmWorkloadDef.Chart = util.Ptr("wg-portal")
+	helmWorkloadDef.ChartVersion = util.Ptr("latest")
+	helmWorkloadDef.ValuesDocument = &valuesStr
+
+	// Update the HelmWorkloadDefinition using the client
+	updatedDef, err := tpclient_v0.UpdateHelmWorkloadDefinition(r.APIClient, r.APIServer, helmWorkloadDef)
+	if err != nil {
+		return 0, fmt.Errorf("failed to update HelmWorkloadDefinition: %w", err)
+	}
+
+	// Optionally, you can log or use the updated definition
+	log.Info("updated HelmWorkloadDefinition", "name", updatedDef.Name)
+
 	return 0, nil
 }
 
@@ -35,5 +96,20 @@ func v0WireguardDefinitionDeleted(
 	wireguardDefinition *v0.WireguardDefinition,
 	log *logr.Logger,
 ) (int64, error) {
+	// Get the associated HelmWorkloadDefinition by name
+	helmWorkloadDef, err := tpclient_v0.GetHelmWorkloadDefinitionByName(r.APIClient, r.APIServer, *wireguardDefinition.Name)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get HelmWorkloadDefinition: %w", err)
+	}
+
+	// Delete the HelmWorkloadDefinition using the client
+	_, err = tpclient_v0.DeleteHelmWorkloadDefinition(r.APIClient, r.APIServer, *helmWorkloadDef.ID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete HelmWorkloadDefinition: %w", err)
+	}
+
+	// Optionally, you can log the deletion
+	log.Info("deleted HelmWorkloadDefinition", "name", helmWorkloadDef.Name)
+
 	return 0, nil
 }

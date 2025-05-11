@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	ReleaseImageRepo          = "docker.io/rj9317/wireguard-threeport-module"
+	ReleaseImageRepo          = "docker.io/rj9317"
 	DevImageRepo              = "localhost:5001"
 	DbInitFilename            = "db.sql"
 	DbInitLocation            = "/etc/threeport/db-create"
