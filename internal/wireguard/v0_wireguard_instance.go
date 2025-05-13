@@ -8,8 +8,10 @@ import (
 	logr "github.com/go-logr/logr"
 	v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/api/v0"
 	tpclient_v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/client/v0"
+	tpapi "github.com/threeport/threeport/pkg/api/v0"
 	tpapi_v0 "github.com/threeport/threeport/pkg/api/v0"
 	helmclient_v0 "github.com/threeport/threeport/pkg/client/v0"
+	tpclient "github.com/threeport/threeport/pkg/client/v0"
 	controller "github.com/threeport/threeport/pkg/controller/v0"
 	"gopkg.in/yaml.v3"
 )
@@ -21,26 +23,46 @@ func v0WireguardInstanceCreated(
 	wireguardInstance *v0.WireguardInstance,
 	log *logr.Logger,
 ) (int64, error) {
+
+	// get attached Kubernetes runtime instance ID
+	kubernetesRuntimeInstanceId, err := tpclient.GetObjectIdByAttachedObject(
+		r.APIClient,
+		r.APIServer,
+		tpapi.ObjectTypeKubernetesRuntimeInstance,
+		v0.ObjectTypeWireguardInstance,
+		*wireguardInstance.ID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get Kubernetes runtime instance by attachment: %w", err)
+	}
+
 	// Get the associated WireguardDefinition
 	wireguardDef, err := tpclient_v0.GetWireguardDefinitionByID(r.APIClient, r.APIServer, *wireguardInstance.WireguardDefinitionID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get WireguardDefinition: %w", err)
 	}
 
-	// Marshal the Helm values to YAML
-	valuesYAML, err := yaml.Marshal(getHelmValues())
+	// Get the associated HelmWorkloadDefinition
+	helmWorkloadDef, err := helmclient_v0.GetHelmWorkloadDefinitionByName(r.APIClient, r.APIServer, *wireguardDef.Name)
 	if err != nil {
-		return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+		return 0, fmt.Errorf("failed to get HelmWorkloadDefinition: %w", err)
 	}
-	valuesStr := string(valuesYAML)
+
+	// // Marshal the Helm values to YAML
+	// valuesYAML, err := yaml.Marshal(getHelmValues())
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	// }
+	// valuesStr := string(valuesYAML)
 
 	// Create HelmWorkloadInstance for wg-portal
 	helmWorkloadInst := &tpapi_v0.HelmWorkloadInstance{
 		Instance: tpapi_v0.Instance{
 			Name: wireguardInstance.Name,
 		},
-		HelmWorkloadDefinitionID: wireguardDef.ID,
-		ValuesDocument:           &valuesStr,
+		HelmWorkloadDefinitionID:    helmWorkloadDef.ID,
+		ValuesDocument:              helmWorkloadDef.ValuesDocument,
+		KubernetesRuntimeInstanceID: kubernetesRuntimeInstanceId,
 	}
 
 	// Create the HelmWorkloadInstance using the client

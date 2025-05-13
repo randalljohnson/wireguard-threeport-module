@@ -3,12 +3,15 @@
 package v0
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
 	api_v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/api/v0"
 	client_v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/client/v0"
 	tpapi_v0 "github.com/threeport/threeport/pkg/api/v0"
+	tpclient "github.com/threeport/threeport/pkg/client/v0"
+	tpconfig "github.com/threeport/threeport/pkg/config/v0"
 	util "github.com/threeport/threeport/pkg/util/v0"
 )
 
@@ -21,7 +24,8 @@ type WireguardConfig struct {
 // WireguardValues contains the attributes needed to manage a wireguard
 // definition and wireguard instance with a single operation.
 type WireguardValues struct {
-	Name *string `yaml:"Name"`
+	Name                      *string                                   `yaml:"Name"`
+	KubernetesRuntimeInstance *tpconfig.KubernetesRuntimeInstanceValues `yaml:"KubernetesRuntimeInstance"`
 }
 
 // Create creates a wireguard definition and instance in the Threeport API.
@@ -108,6 +112,10 @@ func (w *WireguardValues) GetOperations(
 	// add wireguard instance operation
 	wireguardInstanceValues := WireguardInstanceValues{
 		Name: w.Name,
+		WireguardDefinition: WireguardDefinitionValues{
+			Name: w.Name,
+		},
+		KubernetesRuntimeInstance: w.KubernetesRuntimeInstance,
 	}
 	operations.AppendOperation(util.Operation{
 		Create: func() error {
@@ -206,7 +214,9 @@ type WireguardInstanceConfig struct {
 // WireguardInstanceValues contains the attributes for the wireguard instance
 // config abstraction.
 type WireguardInstanceValues struct {
-	Name *string `yaml:"Name"`
+	Name                      *string                                   `yaml:"Name"`
+	WireguardDefinition       WireguardDefinitionValues                 `yaml:"WireguardDefinition"`
+	KubernetesRuntimeInstance *tpconfig.KubernetesRuntimeInstanceValues `yaml:"KubernetesRuntimeInstance"`
 }
 
 // Create creates a wireguard instance in the Threeport API.
@@ -217,11 +227,36 @@ func (w *WireguardInstanceValues) Create(
 	// validate config
 	// TODO
 
+	// get kubernetes runtime instance API object
+	kubernetesRuntimeInstance, err := tpconfig.SetKubernetesRuntimeInstanceForConfig(
+		w.KubernetesRuntimeInstance,
+		apiClient,
+		apiEndpoint,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set kubernetes runtime instance: %w", err)
+	}
+
+	// get wireguard definition by name
+	wireguardDefinition, err := client_v0.GetWireguardDefinitionByName(
+		apiClient,
+		apiEndpoint,
+		*w.WireguardDefinition.Name,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to get wireguard definition by name %s: %w",
+			*w.WireguardDefinition.Name,
+			err,
+		)
+	}
+
 	// construct wireguard instance object
 	wireguardInstance := api_v0.WireguardInstance{
 		Instance: tpapi_v0.Instance{
 			Name: w.Name,
 		},
+		WireguardDefinitionID: wireguardDefinition.ID,
 	}
 
 	// create wireguard instance
@@ -232,6 +267,18 @@ func (w *WireguardInstanceValues) Create(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create wireguard instance in threeport API: %w", err)
+	}
+
+	// create attached object reference to kubernetes runtime instance
+	if err := tpclient.EnsureAttachedObjectReferenceExists(
+		apiClient,
+		apiEndpoint,
+		tpapi_v0.ObjectTypeKubernetesRuntimeInstance,
+		kubernetesRuntimeInstance.ID,
+		api_v0.ObjectTypeWireguardInstance,
+		createdWireguardInstance.ID,
+	); err != nil {
+		return nil, fmt.Errorf("failed to attach wireguard instance to kubernetes runtime instance: %w", err)
 	}
 
 	return createdWireguardInstance, nil
@@ -260,6 +307,36 @@ func (w *WireguardInstanceValues) Delete(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to delete wireguard instance from Threeport API: %w", err)
+	}
+
+	// wait for workload instance to be deleted
+	util.Retry(60, 1, func() error {
+		if _, err := client_v0.GetWireguardInstanceByName(apiClient, apiEndpoint, *w.Name); err == nil {
+			return errors.New("workload instance not deleted")
+		}
+		return nil
+	})
+
+	// get kubernetes runtime instance API object
+	kubernetesRuntimeInstance, err := tpconfig.SetKubernetesRuntimeInstanceForConfig(
+		w.KubernetesRuntimeInstance,
+		apiClient,
+		apiEndpoint,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set kubernetes runtime instance: %w", err)
+	}
+
+	// remove attached object reference to kubernetes runtime instance
+	if err := tpclient.EnsureAttachedObjectReferenceRemoved(
+		apiClient,
+		apiEndpoint,
+		tpapi_v0.ObjectTypeKubernetesRuntimeInstance,
+		kubernetesRuntimeInstance.ID,
+		api_v0.ObjectTypeWireguardInstance,
+		deletedWireguardInstance.ID,
+	); err != nil {
+		return nil, fmt.Errorf("failed to remove wordpress instance attachment to kubernetes runtime instance: %w", err)
 	}
 
 	return deletedWireguardInstance, nil

@@ -5,7 +5,7 @@ ApiDocs:
   Description: API server for the Threeport Wireguard module.
   ContactName: Randall Johnson
   ContactEmail: rj9317@gmail.com
-ImageRepo: docker.io/rj9317/wireguard-threeport-module
+ImageRepo: docker.io/rj9317
 ApiObjectGroups:
 - Name: wireguard
   Objects:

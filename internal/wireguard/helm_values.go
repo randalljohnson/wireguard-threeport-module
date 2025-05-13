@@ -50,7 +50,7 @@ DNS = 8.8.8.8
 
 # Example peer configuration (uncomment and modify as needed)
 [Peer]
-PublicKey = fTo/2gZLB3m7Y7CfIEK5TeZ2R8zERxs5VXB/MtcEyXI=
+PublicKey = qK3sRret/JYE8FuNENuxX+CJzmoHK2eWlbqn9gHLh34=
 AllowedIPs = 10.11.12.2/32
 `,
 			},
@@ -126,7 +126,7 @@ $IPT -I INPUT 1 -i $IN_FACE -p udp --dport $WG_PORT -j ACCEPT
 				"name":      "wg-config",
 			},
 			map[string]interface{}{
-				"mountPath": "/data/wireguard",
+				"mountPath": "/data/wireguard-private-key",
 				"readOnly":  true,
 				"name":      "wireguard-private-key",
 			},
@@ -138,8 +138,8 @@ $IPT -I INPUT 1 -i $IN_FACE -p udp --dport $WG_PORT -j ACCEPT
 					"-c",
 					`sysctl -w net.ipv4.conf.all.forwarding=1 &&
 sh -c /data/iptables/add-nat-routing.sh &&
-wg-quick up /data/wireguard/wg0.conf &&
-wg load /data/wireguard/privatekey
+wg-quick up /data/wireguard/wg0.conf
+#wg set wg0 private-key /data/wireguard-private-key/privatekey
 `,
 				},
 				"image":           "ghcr.io/h44z/wg-portal:v2",
@@ -160,7 +160,7 @@ wg load /data/wireguard/privatekey
 					},
 					map[string]interface{}{
 						"name":      "wireguard-private-key",
-						"mountPath": "/data/wireguard",
+						"mountPath": "/data/wireguard-private-key",
 					},
 					map[string]interface{}{
 						"name":      "iptables-script",
