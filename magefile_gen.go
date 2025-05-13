@@ -17,7 +17,7 @@ import (
 	"runtime"
 )
 
-const releaseArch = "amd64"
+const releaseArch = "arm64"
 
 // Build provides a type for methods that implement build targets.
 type Build mg.Namespace

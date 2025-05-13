@@ -467,7 +467,7 @@ func (i *Installer) InstallWireguardModule() error {
 									i.ControlPlaneImageRepo,
 									i.ControlPlaneImageTag,
 								),
-								"imagePullPolicy": "IfNotPresent",
+								"imagePullPolicy": "Always",
 								"name":            "wireguard-wireguard-controller",
 								"readinessProbe": map[string]interface{}{
 									"failureThreshold": 1,

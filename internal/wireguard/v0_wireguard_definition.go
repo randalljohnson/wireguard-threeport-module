@@ -34,8 +34,8 @@ func v0WireguardDefinitionCreated(
 			Name: wireguardDefinition.Name,
 		},
 		Repo:           util.Ptr("oci://ghcr.io/h44z/charts/wg-portal"),
-		Chart:          util.Ptr("wg-portal"),
-		ChartVersion:   util.Ptr("latest"),
+		Chart:          util.Ptr(""),
+		ChartVersion:   util.Ptr(""),
 		ValuesDocument: &valuesStr,
 	}
 
@@ -73,8 +73,8 @@ func v0WireguardDefinitionUpdated(
 
 	// Update the HelmWorkloadDefinition
 	helmWorkloadDef.Repo = util.Ptr("oci://ghcr.io/h44z/charts/wg-portal")
-	helmWorkloadDef.Chart = util.Ptr("wg-portal")
-	helmWorkloadDef.ChartVersion = util.Ptr("latest")
+	helmWorkloadDef.Chart = util.Ptr("")
+	helmWorkloadDef.ChartVersion = util.Ptr("")
 	helmWorkloadDef.ValuesDocument = &valuesStr
 
 	// Update the HelmWorkloadDefinition using the client
