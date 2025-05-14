@@ -48,13 +48,6 @@ func v0WireguardInstanceCreated(
 		return 0, fmt.Errorf("failed to get HelmWorkloadDefinition: %w", err)
 	}
 
-	// // Marshal the Helm values to YAML
-	// valuesYAML, err := yaml.Marshal(getHelmValues())
-	// if err != nil {
-	// 	return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
-	// }
-	// valuesStr := string(valuesYAML)
-
 	// Create HelmWorkloadInstance for wg-portal
 	helmWorkloadInst := &tpapi_v0.HelmWorkloadInstance{
 		Instance: tpapi_v0.Instance{
@@ -63,6 +56,7 @@ func v0WireguardInstanceCreated(
 		HelmWorkloadDefinitionID:    helmWorkloadDef.ID,
 		ValuesDocument:              helmWorkloadDef.ValuesDocument,
 		KubernetesRuntimeInstanceID: kubernetesRuntimeInstanceId,
+		ReleaseNamespace:            wireguardInstance.Name,
 	}
 
 	// Create the HelmWorkloadInstance using the client

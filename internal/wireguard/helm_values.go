@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 )
 
 // calculateConfigMapHash calculates a hash of all ConfigMap objects in the extraDeploy list
@@ -32,6 +33,39 @@ func calculateConfigMapHash(extraDeploy []interface{}) string {
 }
 
 func getHelmValues() map[string]interface{} {
+	subnet := "10.0.0.0/24"
+	serverIP := "10.0.0.1/24"
+	clientIP := "10.0.0.2/32"
+	wireguardPort := "51820"
+
+	wg0conf := `[Interface]
+Address = %s
+ListenPort = %s
+MTU = 1420
+DNS = 8.8.8.8
+
+# Example peer configuration (uncomment and modify as needed)
+[Peer]
+PublicKey = qK3sRret/JYE8FuNENuxX+CJzmoHK2eWlbqn9gHLh34=
+AllowedIPs = %s`
+	formattedWg0Conf := fmt.Sprintf(wg0conf, serverIP, wireguardPort, clientIP)
+
+	iptablesScript := `#!/bin/bash
+IPT="/sbin/iptables"
+
+IN_FACE="eth0"                   # NIC connected to the internet
+WG_FACE="wg0"                    # WG NIC
+SUB_NET="%s"                     # WG IPv4 sub/net aka CIDR
+WG_PORT="%s"                     # WG udp port
+
+# IPv4 rules #
+$IPT -t nat -I POSTROUTING 1 -s $SUB_NET -o $IN_FACE -j MASQUERADE
+$IPT -I INPUT 1 -i $WG_FACE -j ACCEPT
+$IPT -I FORWARD 1 -i $IN_FACE -o $WG_FACE -j ACCEPT
+$IPT -I FORWARD 1 -i $WG_FACE -o $IN_FACE -j ACCEPT
+$IPT -I INPUT 1 -i $IN_FACE -p udp --dport $WG_PORT -j ACCEPT`
+	formattedIpTablesScript := fmt.Sprintf(iptablesScript, subnet, wireguardPort)
+
 	extraDeploy := []interface{}{
 		map[string]interface{}{
 			"kind": "ConfigMap",
@@ -42,17 +76,7 @@ func getHelmValues() map[string]interface{} {
 				},
 			},
 			"data": map[string]interface{}{
-				"wg0.conf": `[Interface]
-Address = 10.11.12.1/24 ## TODO: should be a variable, not possible without orchestration layer
-ListenPort = 51820
-MTU = 1420
-DNS = 8.8.8.8
-
-# Example peer configuration (uncomment and modify as needed)
-[Peer]
-PublicKey = qK3sRret/JYE8FuNENuxX+CJzmoHK2eWlbqn9gHLh34=
-AllowedIPs = 10.11.12.2/32
-`,
+				"wg0.conf": formattedWg0Conf,
 			},
 			"apiVersion": "v1",
 		},
@@ -63,26 +87,13 @@ AllowedIPs = 10.11.12.2/32
 				"name": "iptables-script",
 			},
 			"data": map[string]interface{}{
-				"add-nat-routing.sh": `#!/bin/bash
-IPT="/sbin/iptables"
-
-IN_FACE="eth0"                   # NIC connected to the internet
-WG_FACE="wg0"                    # WG NIC
-SUB_NET="10.11.12.0/24"          # WG IPv4 sub/net aka CIDR
-WG_PORT="51820"                  # WG udp port
-
-# IPv4 rules #
-$IPT -t nat -I POSTROUTING 1 -s $SUB_NET -o $IN_FACE -j MASQUERADE
-$IPT -I INPUT 1 -i $WG_FACE -j ACCEPT
-$IPT -I FORWARD 1 -i $IN_FACE -o $WG_FACE -j ACCEPT
-$IPT -I FORWARD 1 -i $WG_FACE -o $IN_FACE -j ACCEPT
-$IPT -I INPUT 1 -i $IN_FACE -p udp --dport $WG_PORT -j ACCEPT
-`,
+				"add-nat-routing.sh": formattedIpTablesScript,
 			},
 		},
 	}
 
-	// Calculate hash of ConfigMaps
+	// Calculate hash of ConfigMaps, which will trigger a pod restart
+	// on changes made to wireguard config
 	configMapHash := calculateConfigMapHash(extraDeploy)
 
 	return map[string]interface{}{
@@ -106,8 +117,8 @@ $IPT -I INPUT 1 -i $IN_FACE -p udp --dport $WG_PORT -j ACCEPT
 			},
 			map[string]interface{}{
 				"name": "wireguard-private-key",
-				"configMap": map[string]interface{}{
-					"name":        "wireguard-private-key",
+				"secret": map[string]interface{}{
+					"secretName":  "wireguard-private-key",
 					"defaultMode": 0400,
 				},
 			},
@@ -139,7 +150,7 @@ $IPT -I INPUT 1 -i $IN_FACE -p udp --dport $WG_PORT -j ACCEPT
 					`sysctl -w net.ipv4.conf.all.forwarding=1 &&
 sh -c /data/iptables/add-nat-routing.sh &&
 wg-quick up /data/wireguard/wg0.conf
-#wg set wg0 private-key /data/wireguard-private-key/privatekey
+wg set wg0 private-key /data/wireguard-private-key/privatekey
 `,
 				},
 				"image":           "ghcr.io/h44z/wg-portal:v2",
