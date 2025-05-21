@@ -9,6 +9,8 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"net/http"
+
 	api_v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/api/v0"
 	tp_api "github.com/threeport/threeport/pkg/api/v0"
 	tp_auth "github.com/threeport/threeport/pkg/auth/v0"
@@ -22,7 +24,6 @@ import (
 	unstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	dynamic "k8s.io/client-go/dynamic"
-	"net/http"
 )
 
 const (
@@ -62,6 +63,9 @@ type Installer struct {
 
 	// If true, auth is enabled on Threeport API.
 	AuthEnabled bool
+
+	// If true, module is deployed with delve (debugger).
+	Debug bool
 }
 
 // NewInstaller returns a wireguard module installer with default values.
@@ -173,6 +177,37 @@ func (i *Installer) InstallWireguardModule() error {
 	if !i.AuthEnabled {
 		apiArgs = append(apiArgs, "-auth-enabled=false")
 	}
+	if cpi.Opts.Debug {
+		ports = append(ports,
+			map[string]interface{}{
+				"containerPort": 40000,
+				"name":          "dlv",
+				"protocol":      "TCP",
+			})
+	}
+	// api args
+	args := []interface{}{
+		"--",
+		"-auto-migrate=true",
+		"-verbose=true",
+	}
+	// controller args
+	args := []interface{}{}
+	if !cpi.Opts.AuthEnabled {
+		args = append(args, "-auth-enabled=false")
+	}
+	if cpi.Opts.Verbose {
+		args = append(args, "-verbose=true")
+	}
+	if len(args) > 0 {
+		args = append([]interface{}{"--"}, args...)
+	}
+	// return
+	// append(util.StringToInterfaceList(cpi.getDelveArgs(cpi.Opts.AgentInfo.Name)),
+	// args...)
+	// if cpi.Opts.Debug && !cpi.Opts.LiveReload {
+	// 	return "Always"
+	// }
 	var wireguardApiDeploy = &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "apps/v1",
@@ -768,5 +803,61 @@ func getVolumeMounts() []interface{} {
 			"mountPath": "/etc/threeport/cert",
 			"name":      certSecretName,
 		},
+	}
+}
+
+// cpi.getDelveArgs returns the args that are passed to delve.
+// func (cpi *ControlPlaneInstaller) getDelveArgs(name string) []string {
+func (i *Installer) getDelveArgs(name string) []string {
+	args := []string{
+		"--continue",
+		"--accept-multiclient",
+		"--listen=:40000",
+		"--headless=true",
+		"--api-version=2",
+	}
+
+	if i.Debug {
+		args = append(args, "--log")
+	}
+
+	args = append(args, "exec")
+	args = append(args, fmt.Sprintf("/%s", name))
+	return args
+}
+
+// func (cpi *ControlPlaneInstaller) getReadinessProbe() map[string]interface{} {
+func (i *Installer) getReadinessProbe() map[string]interface{} {
+	var readinessProbe map[string]interface{}
+	if !i.Debug {
+		readinessProbe = map[string]interface{}{
+			"failureThreshold": 1,
+			"httpGet": map[string]interface{}{
+				"path":   "/readyz",
+				"port":   8081,
+				"scheme": "HTTP",
+			},
+			"initialDelaySeconds": 1,
+			"periodSeconds":       2,
+			"successThreshold":    1,
+			"timeoutSeconds":      1,
+		}
+	}
+	return readinessProbe
+}
+
+// getCommand returns the args that are passed to the container.
+// func (cpi *ControlPlaneInstaller) getCommand(name string) []interface{} {
+func (i *Installer) getCommand(name string) []interface{} {
+
+	switch {
+	case i.Debug:
+		return []interface{}{
+			"/usr/local/bin/dlv",
+		}
+	default:
+		return []interface{}{
+			fmt.Sprintf("/%s", name),
+		}
 	}
 }
