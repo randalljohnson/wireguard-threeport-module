@@ -7,14 +7,15 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
+
 	mg "github.com/magefile/mage/mg"
 	version "github.com/randalljohnson/wireguard-threeport-module/internal/version"
 	installer "github.com/randalljohnson/wireguard-threeport-module/pkg/installer/v0"
 	tptdev "github.com/threeport/threeport/pkg/threeport-installer/v0/tptdev"
 	util "github.com/threeport/threeport/pkg/util/v0"
-	"os"
-	"os/exec"
-	"runtime"
 )
 
 const releaseArch = "arm64"

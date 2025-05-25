@@ -4,6 +4,8 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+
 	version "github.com/randalljohnson/wireguard-threeport-module/internal/version"
 	installer "github.com/randalljohnson/wireguard-threeport-module/pkg/installer/v0"
 	cobra "github.com/spf13/cobra"
@@ -12,13 +14,13 @@ import (
 	client "github.com/threeport/threeport/pkg/client/v0"
 	config "github.com/threeport/threeport/pkg/config/v0"
 	kube "github.com/threeport/threeport/pkg/kube/v0"
-	"os"
 )
 
 var (
 	development           bool
 	controlPlaneImageRepo string
 	controlPlaneImageTag  string
+	debug                 bool
 )
 
 // installCmd represents the install command
@@ -83,6 +85,7 @@ var installCmd = &cobra.Command{
 		// create installer
 		inst := installer.NewInstaller(dynamicInterface, restMapper)
 		inst.AuthEnabled = authEnabled
+		inst.Debug = debug
 		if development {
 			inst.ControlPlaneImageRepo = installer.DevImageRepo
 			inst.ControlPlaneImageTag = controlPlaneImageTag
@@ -131,5 +134,9 @@ func init() {
 	installCmd.Flags().StringVarP(
 		&controlPlaneImageTag,
 		"control-plane-image-tag", "t", version.GetVersion(), "Image tag to pull threeport control plane images from.",
+	)
+	installCmd.Flags().BoolVarP(
+		&debug,
+		"debug", "d", false, "If true, debug mode will be enabled for the wireguard module.",
 	)
 }

@@ -16,6 +16,7 @@ require (
 	github.com/magefile/mage v1.15.0
 	github.com/namsral/flag v1.7.4-pre
 	github.com/nats-io/nats.go v1.42.0
+	github.com/oracle/oci-go-sdk/v65 v65.89.3
 	github.com/pressly/goose/v3 v3.24.3
 	github.com/spf13/cobra v1.9.1
 	github.com/threeport/threeport v0.6.1
@@ -156,7 +157,6 @@ require (
 	github.com/opencontainers/image-spec v1.1.0 // indirect
 	github.com/opentracing/basictracer-go v1.1.0 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
-	github.com/oracle/oci-go-sdk/v65 v65.89.3 // indirect
 	github.com/pborman/uuid v1.2.1 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
@@ -169,9 +169,9 @@ require (
 	github.com/prometheus/common v0.62.0 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/pulumi/appdash v0.0.0-20231130102222-75f619a67231 // indirect
-	github.com/pulumi/esc v0.9.1 // indirect
+	github.com/pulumi/esc v0.13.0 // indirect
 	github.com/pulumi/pulumi-oci/sdk/v2 v2.32.0 // indirect
-	github.com/pulumi/pulumi/sdk/v3 v3.160.0 // indirect
+	github.com/pulumi/pulumi/sdk/v3 v3.170.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06 // indirect
