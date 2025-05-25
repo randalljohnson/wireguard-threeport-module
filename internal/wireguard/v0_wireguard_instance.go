@@ -197,7 +197,7 @@ func configureSecurityListRules(
 
 	// Initialize OCI client using the account credentials
 	ociClient := common.NewRawConfigurationProvider(
-		*ociAccount.TenancyID,
+		*ociAccount.TenancyOCID,
 		*ociAccount.UserOCID,
 		*ociAccount.DefaultRegion,
 		*ociAccount.KeyFingerprint,
@@ -242,7 +242,7 @@ func configureSecurityListRules(
 
 	// Get all subnets in the VCN
 	listSubnetsRequest := core.ListSubnetsRequest{
-		CompartmentId: ociAccount.TenancyID,
+		CompartmentId: ociAccount.TenancyOCID,
 		VcnId:         &vcnID,
 	}
 	subnets, err := vcnClient.ListSubnets(context.Background(), listSubnetsRequest)
