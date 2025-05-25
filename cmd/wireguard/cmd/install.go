@@ -135,8 +135,8 @@ func init() {
 		&controlPlaneImageTag,
 		"control-plane-image-tag", "t", version.GetVersion(), "Image tag to pull threeport control plane images from.",
 	)
-	installCmd.Flags().BoolVarP(
+	installCmd.Flags().BoolVar(
 		&debug,
-		"debug", "d", false, "If true, debug mode will be enabled for the wireguard module.",
+		"debug", false, "If true, debug mode will be enabled for the wireguard module.",
 	)
 }
