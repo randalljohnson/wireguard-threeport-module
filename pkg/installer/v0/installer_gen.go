@@ -197,6 +197,10 @@ func (i *Installer) InstallWireguardModule() error {
 
 	if i.Debug {
 		apiArgs = append(
+			[]interface{}{"--"},
+			apiArgs...,
+		)
+		apiArgs = append(
 			util.StringToInterfaceList(i.getDelveArgs("rest-api")),
 			apiArgs...,
 		)
