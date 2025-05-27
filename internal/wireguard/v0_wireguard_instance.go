@@ -366,7 +366,7 @@ func configureSecurityListRules(
 	lbRuleConfig := SecurityRuleConfig{
 		Protocol:    "17", // udp
 		Source:      "0.0.0.0/0",
-		Description: fmt.Sprintf("%s: allow wireguard udp traffic", getModulePrefix(wireguardInstance)),
+		Description: fmt.Sprintf("%s: Allow Wireguard UDP traffic", getModulePrefix(wireguardInstance)),
 		Port:        51820,
 	}
 	if err := manager.addSecurityRule(setup.lbSecurityList, lbRuleConfig); err != nil {
@@ -377,7 +377,7 @@ func configureSecurityListRules(
 	workerRuleConfig := SecurityRuleConfig{
 		Protocol:    "17", // udp
 		Source:      *setup.workerSubnet.CidrBlock,
-		Description: fmt.Sprintf("%s: allow wireguard udp traffic", getModulePrefix(wireguardInstance)),
+		Description: fmt.Sprintf("%s: Allow Wireguard UDP traffic", getModulePrefix(wireguardInstance)),
 		Port:        setup.wireguardPort,
 	}
 	if err := manager.addSecurityRule(setup.workerSecurityList, workerRuleConfig); err != nil {
