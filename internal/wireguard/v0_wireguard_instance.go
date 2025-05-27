@@ -27,6 +27,81 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+// v0WireguardInstanceCreated performs reconciliation when a v0 WireguardInstance
+// has been created.
+func v0WireguardInstanceCreated(
+	r *controller.Reconciler,
+	wireguardInstance *v0.WireguardInstance,
+	log *logr.Logger,
+) (int64, error) {
+	// create HelmWorkloadInstance
+	if err := createHelmWorkloadInstance(r, wireguardInstance, log); err != nil {
+		return 0, fmt.Errorf("failed to create HelmWorkloadInstance: %w", err)
+	}
+
+	// configure security list rules
+	if err := configureSecurityListRules(r, wireguardInstance, log); err != nil {
+		return 0, fmt.Errorf("failed to configure security list rules: %w", err)
+	}
+
+	return 0, nil
+}
+
+// v0WireguardInstanceUpdated performs reconciliation when a v0 WireguardInstance
+// has been updated.
+func v0WireguardInstanceUpdated(
+	r *controller.Reconciler,
+	wireguardInstance *v0.WireguardInstance,
+	log *logr.Logger,
+) (int64, error) {
+	// get helm workload instance
+	helmWorkloadInst, err := helmclient_v0.GetHelmWorkloadInstanceByName(r.APIClient, r.APIServer, *wireguardInstance.Name)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get HelmWorkloadInstance: %w", err)
+	}
+
+	// marshal helm values
+	valuesYAML, err := yaml.Marshal(getHelmValues())
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	}
+	valuesStr := string(valuesYAML)
+
+	// update values
+	helmWorkloadInst.ValuesDocument = &valuesStr
+
+	// update instance
+	updatedInst, err := helmclient_v0.UpdateHelmWorkloadInstance(r.APIClient, r.APIServer, helmWorkloadInst)
+	if err != nil {
+		return 0, fmt.Errorf("failed to update HelmWorkloadInstance: %w", err)
+	}
+
+	// log update
+	log.Info("updated HelmWorkloadInstance", "name", updatedInst.Name)
+
+	return 0, nil
+}
+
+// v0WireguardInstanceDeleted performs reconciliation when a v0 WireguardInstance
+// has been deleted.
+func v0WireguardInstanceDeleted(
+	r *controller.Reconciler,
+	wireguardInstance *v0.WireguardInstance,
+	log *logr.Logger,
+) (int64, error) {
+	// Remove security list rules first
+	if err := removeSecurityListRules(r, wireguardInstance, log); err != nil {
+		log.Error(err, "failed to remove security list rules, proceeding with HelmWorkloadInstance deletion")
+	}
+
+	// delete HelmWorkloadInstance
+	if err := cleanupHelmWorkloadInstance(r, wireguardInstance, log); err != nil {
+		return 0, fmt.Errorf("failed to cleanup HelmWorkloadInstance: %w", err)
+	}
+
+	return 0, nil
+}
+
 // OciSetup holds all the necessary OCI clients and resources
 type OciSetup struct {
 	vcnClient          core.VirtualNetworkClient
@@ -78,8 +153,7 @@ func setupOciResources(
 
 	// check oci provider
 	if *kubernetesRuntimeDef.InfraProvider != tpapi_v0.KubernetesRuntimeInfraProviderOKE {
-		log.Info("not running on oci, skipping security list configuration")
-		return nil, nil
+		return nil, fmt.Errorf("only oke is supported")
 	}
 
 	// get oci account
@@ -271,81 +345,6 @@ func setupOciResources(
 	}, nil
 }
 
-// v0WireguardInstanceCreated performs reconciliation when a v0 WireguardInstance
-// has been created.
-func v0WireguardInstanceCreated(
-	r *controller.Reconciler,
-	wireguardInstance *v0.WireguardInstance,
-	log *logr.Logger,
-) (int64, error) {
-	// create HelmWorkloadInstance
-	if err := createHelmWorkloadInstance(r, wireguardInstance, log); err != nil {
-		return 0, fmt.Errorf("failed to create HelmWorkloadInstance: %w", err)
-	}
-
-	// configure security list rules
-	if err := configureSecurityListRules(r, wireguardInstance, log); err != nil {
-		return 0, fmt.Errorf("failed to configure security list rules: %w", err)
-	}
-
-	return 0, nil
-}
-
-// v0WireguardInstanceUpdated performs reconciliation when a v0 WireguardInstance
-// has been updated.
-func v0WireguardInstanceUpdated(
-	r *controller.Reconciler,
-	wireguardInstance *v0.WireguardInstance,
-	log *logr.Logger,
-) (int64, error) {
-	// get helm workload instance
-	helmWorkloadInst, err := helmclient_v0.GetHelmWorkloadInstanceByName(r.APIClient, r.APIServer, *wireguardInstance.Name)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get HelmWorkloadInstance: %w", err)
-	}
-
-	// marshal helm values
-	valuesYAML, err := yaml.Marshal(getHelmValues())
-	if err != nil {
-		return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
-	}
-	valuesStr := string(valuesYAML)
-
-	// update values
-	helmWorkloadInst.ValuesDocument = &valuesStr
-
-	// update instance
-	updatedInst, err := helmclient_v0.UpdateHelmWorkloadInstance(r.APIClient, r.APIServer, helmWorkloadInst)
-	if err != nil {
-		return 0, fmt.Errorf("failed to update HelmWorkloadInstance: %w", err)
-	}
-
-	// log update
-	log.Info("updated HelmWorkloadInstance", "name", updatedInst.Name)
-
-	return 0, nil
-}
-
-// v0WireguardInstanceDeleted performs reconciliation when a v0 WireguardInstance
-// has been deleted.
-func v0WireguardInstanceDeleted(
-	r *controller.Reconciler,
-	wireguardInstance *v0.WireguardInstance,
-	log *logr.Logger,
-) (int64, error) {
-	// Remove security list rules first
-	if err := removeSecurityListRules(r, wireguardInstance, log); err != nil {
-		log.Error(err, "failed to remove security list rules, proceeding with HelmWorkloadInstance deletion")
-	}
-
-	// delete HelmWorkloadInstance
-	if err := cleanupHelmWorkloadInstance(r, wireguardInstance, log); err != nil {
-		return 0, fmt.Errorf("failed to cleanup HelmWorkloadInstance: %w", err)
-	}
-
-	return 0, nil
-}
-
 // configureSecurityListRules configures the necessary security list rules for Wireguard
 func configureSecurityListRules(
 	r *controller.Reconciler,
@@ -355,9 +354,6 @@ func configureSecurityListRules(
 	setup, err := setupOciResources(r, wireguardInstance, log)
 	if err != nil {
 		return err
-	}
-	if setup == nil {
-		return nil // not running on OCI
 	}
 
 	// create security list manager
