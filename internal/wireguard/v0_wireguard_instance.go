@@ -29,11 +29,13 @@ import (
 
 // OciSetup holds all the necessary OCI clients and resources
 type OciSetup struct {
-	vcnClient       core.VirtualNetworkClient
-	containerClient containerengine.ContainerEngineClient
-	lbSubnet        *core.Subnet
-	workerSubnet    *core.Subnet
-	wireguardPort   int32
+	vcnClient          core.VirtualNetworkClient
+	containerClient    containerengine.ContainerEngineClient
+	lbSubnet           *core.Subnet
+	workerSubnet       *core.Subnet
+	wireguardPort      int32
+	lbSecurityList     *core.SecurityList
+	workerSecurityList *core.SecurityList
 }
 
 // setupOciResources initializes OCI clients and retrieves necessary resources
@@ -236,12 +238,36 @@ func setupOciResources(
 		return nil, fmt.Errorf("failed to find wireguard port in service")
 	}
 
+	// get security lists for both subnets
+	if len(workerSubnet.SecurityListIds) == 0 {
+		return nil, fmt.Errorf("worker subnet has no security lists")
+	}
+	if len(lbSubnet.SecurityListIds) == 0 {
+		return nil, fmt.Errorf("loadbalancer subnet has no security lists")
+	}
+
+	workerSecurityList, err := vcnClient.GetSecurityList(context.Background(), core.GetSecurityListRequest{
+		SecurityListId: &workerSubnet.SecurityListIds[0],
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get worker subnet security list: %w", err)
+	}
+
+	lbSecurityList, err := vcnClient.GetSecurityList(context.Background(), core.GetSecurityListRequest{
+		SecurityListId: &lbSubnet.SecurityListIds[0],
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get loadbalancer subnet security list: %w", err)
+	}
+
 	return &OciSetup{
-		vcnClient:       vcnClient,
-		containerClient: containerClient,
-		lbSubnet:        lbSubnet,
-		workerSubnet:    workerSubnet,
-		wireguardPort:   wireguardPort,
+		vcnClient:          vcnClient,
+		containerClient:    containerClient,
+		lbSubnet:           lbSubnet,
+		workerSubnet:       workerSubnet,
+		wireguardPort:      wireguardPort,
+		lbSecurityList:     &lbSecurityList.SecurityList,
+		workerSecurityList: &workerSecurityList.SecurityList,
 	}, nil
 }
 
@@ -334,32 +360,10 @@ func configureSecurityListRules(
 		return nil // not running on OCI
 	}
 
-	// get security lists for both subnets
-	if len(setup.workerSubnet.SecurityListIds) == 0 {
-		return fmt.Errorf("worker subnet has no security lists")
-	}
-	if len(setup.lbSubnet.SecurityListIds) == 0 {
-		return fmt.Errorf("loadbalancer subnet has no security lists")
-	}
-
-	workerSecurityList, err := setup.vcnClient.GetSecurityList(context.Background(), core.GetSecurityListRequest{
-		SecurityListId: &setup.workerSubnet.SecurityListIds[0],
-	})
-	if err != nil {
-		return fmt.Errorf("failed to get worker subnet security list: %w", err)
-	}
-
-	lbSecurityList, err := setup.vcnClient.GetSecurityList(context.Background(), core.GetSecurityListRequest{
-		SecurityListId: &setup.lbSubnet.SecurityListIds[0],
-	})
-	if err != nil {
-		return fmt.Errorf("failed to get loadbalancer subnet security list: %w", err)
-	}
-
 	// create security list manager
 	manager := &SecurityListManager{
-		vcnClient: setup.vcnClient,
-		log:       *log,
+		vcnClient: &setup.vcnClient,
+		log:       log,
 	}
 
 	// add loadbalancer rule
@@ -369,7 +373,7 @@ func configureSecurityListRules(
 		Description: fmt.Sprintf("%s: allow wireguard udp traffic", getModulePrefix(wireguardInstance)),
 		Port:        setup.wireguardPort,
 	}
-	if err := manager.addSecurityRule(&lbSecurityList.SecurityList, lbRuleConfig); err != nil {
+	if err := manager.addSecurityRule(setup.lbSecurityList, lbRuleConfig); err != nil {
 		return fmt.Errorf("failed to add loadbalancer security rule: %w", err)
 	}
 
@@ -380,7 +384,7 @@ func configureSecurityListRules(
 		Description: fmt.Sprintf("%s: allow wireguard udp traffic", getModulePrefix(wireguardInstance)),
 		Port:        setup.wireguardPort,
 	}
-	if err := manager.addSecurityRule(&workerSecurityList.SecurityList, workerRuleConfig); err != nil {
+	if err := manager.addSecurityRule(setup.workerSecurityList, workerRuleConfig); err != nil {
 		return fmt.Errorf("failed to add worker security rule: %w", err)
 	}
 
@@ -408,41 +412,19 @@ func removeSecurityListRules(
 		return nil // not running on OCI
 	}
 
-	// get security lists for both subnets
-	if len(setup.workerSubnet.SecurityListIds) == 0 {
-		return fmt.Errorf("worker subnet has no security lists")
-	}
-	if len(setup.lbSubnet.SecurityListIds) == 0 {
-		return fmt.Errorf("loadbalancer subnet has no security lists")
-	}
-
-	workerSecurityList, err := setup.vcnClient.GetSecurityList(context.Background(), core.GetSecurityListRequest{
-		SecurityListId: &setup.workerSubnet.SecurityListIds[0],
-	})
-	if err != nil {
-		return fmt.Errorf("failed to get worker subnet security list: %w", err)
-	}
-
-	lbSecurityList, err := setup.vcnClient.GetSecurityList(context.Background(), core.GetSecurityListRequest{
-		SecurityListId: &setup.lbSubnet.SecurityListIds[0],
-	})
-	if err != nil {
-		return fmt.Errorf("failed to get loadbalancer subnet security list: %w", err)
-	}
-
 	// create security list manager
 	manager := &SecurityListManager{
-		vcnClient: setup.vcnClient,
-		log:       *log,
+		vcnClient: &setup.vcnClient,
+		log:       log,
 	}
 
 	// remove loadbalancer rule
-	if err := manager.removeSecurityRule(&lbSecurityList.SecurityList, getModulePrefix(wireguardInstance), setup.wireguardPort); err != nil {
+	if err := manager.removeSecurityRule(setup.lbSecurityList, getModulePrefix(wireguardInstance), setup.wireguardPort); err != nil {
 		return fmt.Errorf("failed to remove loadbalancer security rule: %w", err)
 	}
 
 	// remove worker rule
-	if err := manager.removeSecurityRule(&workerSecurityList.SecurityList, getModulePrefix(wireguardInstance), setup.wireguardPort); err != nil {
+	if err := manager.removeSecurityRule(setup.workerSecurityList, getModulePrefix(wireguardInstance), setup.wireguardPort); err != nil {
 		return fmt.Errorf("failed to remove worker security rule: %w", err)
 	}
 
@@ -547,8 +529,8 @@ func cleanupHelmWorkloadInstance(
 
 // SecurityListManager manages security list rules
 type SecurityListManager struct {
-	vcnClient core.VirtualNetworkClient
-	log       logr.Logger
+	vcnClient *core.VirtualNetworkClient
+	log       *logr.Logger
 }
 
 // SecurityRuleConfig represents the configuration for a security rule
