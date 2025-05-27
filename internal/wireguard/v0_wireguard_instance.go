@@ -5,7 +5,6 @@ package wireguard
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	logr "github.com/go-logr/logr"
 	"github.com/oracle/oci-go-sdk/v65/common"
@@ -72,6 +71,11 @@ func v0WireguardInstanceCreated(
 	createdInst, err := helmclient_v0.CreateHelmWorkloadInstance(r.APIClient, r.APIServer, helmWorkloadInst)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create HelmWorkloadInstance: %w", err)
+	}
+
+	// Configure security list rules
+	if err := configureSecurityListRules(r, wireguardInstance, log); err != nil {
+		return 0, fmt.Errorf("failed to configure security list rules: %w", err)
 	}
 
 	// Optionally, you can log or use the created instance
@@ -180,7 +184,8 @@ func configureSecurityListRules(
 	}
 
 	// Check if we're running on OCI
-	if *kubernetesRuntimeDef.InfraProvider != "oci" {
+	// todo: use constant for "oci" string
+	if *kubernetesRuntimeDef.InfraProvider != tpapi_v0.KubernetesRuntimeInfraProviderOKE {
 		log.Info("not running on OCI, skipping security list configuration")
 		return nil
 	}
@@ -189,7 +194,7 @@ func configureSecurityListRules(
 	ociAccount, err := tpclient.GetOciAccountByName(
 		r.APIClient,
 		r.APIServer,
-		"default",
+		"default-account",
 	)
 	if err != nil {
 		return fmt.Errorf("failed to get default OCI account: %w", err)
@@ -206,17 +211,17 @@ func configureSecurityListRules(
 	)
 
 	// Get the OCI OKE runtime instance to get the cluster OCID
-	ociokeRuntimeInstance, err := tpclient.GetOciOkeKubernetesRuntimeInstanceByID(
+	ociOkeRuntimeInstance, err := tpclient.GetOciOkeKubernetesRuntimeInstanceByName(
 		r.APIClient,
 		r.APIServer,
-		*kubernetesRuntimeInstance.ID,
+		*kubernetesRuntimeInstance.Name,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to get OCI OKE runtime instance: %w", err)
 	}
 
 	// Get the cluster OCID
-	clusterOCID := *ociokeRuntimeInstance.ClusterOCID
+	clusterOCID := *ociOkeRuntimeInstance.ClusterOCID
 
 	// Create OCI clients for the required services
 	vcnClient, err := core.NewVirtualNetworkClientWithConfigurationProvider(ociClient)
@@ -229,7 +234,7 @@ func configureSecurityListRules(
 		return fmt.Errorf("failed to create Container Engine client: %w", err)
 	}
 
-	// Get cluster details to find the VCN ID
+	// Get cluster details to find the VCN ID and subnets
 	cluster, err := containerClient.GetCluster(context.Background(), containerengine.GetClusterRequest{
 		ClusterId: &clusterOCID,
 	})
@@ -237,33 +242,43 @@ func configureSecurityListRules(
 		return fmt.Errorf("failed to get cluster details: %w", err)
 	}
 
-	// Get the VCN ID from the cluster's network configuration
-	vcnID := *cluster.VcnId
-
-	// Get all subnets in the VCN
-	listSubnetsRequest := core.ListSubnetsRequest{
-		CompartmentId: ociAccount.TenancyOCID,
-		VcnId:         &vcnID,
-	}
-	subnets, err := vcnClient.ListSubnets(context.Background(), listSubnetsRequest)
+	// Get the load balancer subnet from cluster metadata
+	lbSubnetID := cluster.Options.ServiceLbSubnetIds[0]
+	lbSubnetResp, err := vcnClient.GetSubnet(context.Background(), core.GetSubnetRequest{
+		SubnetId: &lbSubnetID,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to list subnets: %w", err)
+		return fmt.Errorf("failed to get load balancer subnet: %w", err)
+	}
+	lbSubnet := &lbSubnetResp.Subnet
+
+	// Get node pools to find worker node subnets
+	nodePools, err := containerClient.ListNodePools(context.Background(), containerengine.ListNodePoolsRequest{
+		CompartmentId: ociAccount.TenancyOCID,
+		ClusterId:     &clusterOCID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list node pools: %w", err)
 	}
 
-	// Find worker node subnet and load balancer subnet
-	var workerSubnet, lbSubnet *core.Subnet
-	for _, subnet := range subnets.Items {
-		if subnet.DisplayName != nil {
-			if strings.Contains(*subnet.DisplayName, "worker") {
-				workerSubnet = &subnet
-			} else if strings.Contains(*subnet.DisplayName, "lb") {
-				lbSubnet = &subnet
+	// Get the first worker node subnet from node pools
+	var workerSubnet *core.Subnet
+	for _, nodePool := range nodePools.Items {
+		if nodePool.SubnetIds != nil && len(nodePool.SubnetIds) > 0 {
+			workerSubnetID := nodePool.SubnetIds[0]
+			workerSubnetResp, err := vcnClient.GetSubnet(context.Background(), core.GetSubnetRequest{
+				SubnetId: &workerSubnetID,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to get worker subnet: %w", err)
 			}
+			workerSubnet = &workerSubnetResp.Subnet
+			break
 		}
 	}
 
-	if workerSubnet == nil || lbSubnet == nil {
-		return fmt.Errorf("failed to find required subnets")
+	if workerSubnet == nil {
+		return fmt.Errorf("failed to find worker subnet in node pools")
 	}
 
 	// Get the Wireguard service from Kubernetes to determine the exposed port
@@ -272,7 +287,7 @@ func configureSecurityListRules(
 		false,
 		r.APIClient,
 		r.APIServer,
-		"", // encryption key not needed for this operation
+		r.EncryptionKey,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to get Kubernetes client: %w", err)
@@ -285,15 +300,23 @@ func configureSecurityListRules(
 		Resource: "services",
 	}
 
-	// Get the Wireguard service as an unstructured object
-	serviceObj, err := kubeClient.Resource(serviceGVR).Namespace(*wireguardInstance.Name).Get(
+	// List services and filter for LoadBalancer type
+	serviceList, err := kubeClient.Resource(serviceGVR).Namespace(*wireguardInstance.Name).List(
 		context.Background(),
-		"wireguard",
-		metav1.GetOptions{},
+		metav1.ListOptions{
+			FieldSelector: "spec.type=LoadBalancer",
+		},
 	)
 	if err != nil {
-		return fmt.Errorf("failed to get Wireguard service: %w", err)
+		return fmt.Errorf("failed to list services: %w", err)
+	} else if len(serviceList.Items) == 0 {
+		return fmt.Errorf("failed to find wireguard service of type LoadBalancer")
+	} else if len(serviceList.Items) > 1 {
+		return fmt.Errorf("found multiple wireguard services of type LoadBalancer")
 	}
+
+	// Get the first service from the list
+	serviceObj := serviceList.Items[0]
 
 	// Extract the port from the unstructured object
 	ports, found, err := unstructured.NestedSlice(serviceObj.Object, "spec", "ports")
@@ -307,7 +330,7 @@ func configureSecurityListRules(
 		if !ok {
 			continue
 		}
-		if name, ok := portMap["name"].(string); ok && name == "wireguard" {
+		if name, ok := portMap["name"].(string); ok && name == "wg0" {
 			if nodePort, ok := portMap["nodePort"].(int64); ok {
 				wireguardPort = int32(nodePort)
 				break
@@ -338,8 +361,33 @@ func configureSecurityListRules(
 		return fmt.Errorf("failed to get load balancer subnet security list: %w", err)
 	}
 
-	// Create UDP ingress rule for Wireguard
-	wireguardRule := core.IngressSecurityRule{
+	// Create load balancer subnet UDP ingress rule for Wireguard
+	wireguardLoadBalancerRule := core.IngressSecurityRule{
+		Protocol:    common.String("17"), // UDP
+		Source:      common.String("0.0.0.0/0"),
+		Description: common.String("Allow Wireguard UDP traffic"),
+		UdpOptions: &core.UdpOptions{
+			DestinationPortRange: &core.PortRange{
+				Min: common.Int(int(51820)),
+				Max: common.Int(int(51820)),
+			},
+		},
+	}
+
+	// Update load balancer subnet security list
+	lbRules := append(lbSecurityList.IngressSecurityRules, wireguardLoadBalancerRule)
+	_, err = vcnClient.UpdateSecurityList(context.Background(), core.UpdateSecurityListRequest{
+		SecurityListId: &lbSubnet.SecurityListIds[0],
+		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+			IngressSecurityRules: lbRules,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update load balancer subnet security list: %w", err)
+	}
+
+	// Create worker subnet UDP ingress rule for Wireguard
+	wireguardWorkerRule := core.IngressSecurityRule{
 		Protocol:    common.String("17"), // UDP
 		Source:      common.String("0.0.0.0/0"),
 		Description: common.String("Allow Wireguard UDP traffic"),
@@ -352,7 +400,7 @@ func configureSecurityListRules(
 	}
 
 	// Update worker subnet security list
-	workerRules := append(workerSecurityList.IngressSecurityRules, wireguardRule)
+	workerRules := append(workerSecurityList.IngressSecurityRules, wireguardWorkerRule)
 	_, err = vcnClient.UpdateSecurityList(context.Background(), core.UpdateSecurityListRequest{
 		SecurityListId: &workerSubnet.SecurityListIds[0],
 		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
@@ -361,18 +409,6 @@ func configureSecurityListRules(
 	})
 	if err != nil {
 		return fmt.Errorf("failed to update worker subnet security list: %w", err)
-	}
-
-	// Update load balancer subnet security list
-	lbRules := append(lbSecurityList.IngressSecurityRules, wireguardRule)
-	_, err = vcnClient.UpdateSecurityList(context.Background(), core.UpdateSecurityListRequest{
-		SecurityListId: &lbSubnet.SecurityListIds[0],
-		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
-			IngressSecurityRules: lbRules,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to update load balancer subnet security list: %w", err)
 	}
 
 	log.Info("successfully configured security list rules for Wireguard",

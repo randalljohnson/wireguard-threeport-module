@@ -173,7 +173,7 @@ func (i *Installer) InstallWireguardModule() error {
 	}
 
 	// configure ports
-	ports := []map[string]interface{}{
+	apiPorts := []map[string]interface{}{
 		{
 			"containerPort": 1323,
 			"name":          "api",
@@ -181,7 +181,17 @@ func (i *Installer) InstallWireguardModule() error {
 		},
 	}
 	if i.Debug {
-		ports = append(ports,
+		apiPorts = append(apiPorts,
+			map[string]interface{}{
+				"containerPort": 40000,
+				"name":          "dlv",
+				"protocol":      "TCP",
+			})
+	}
+
+	controllerPorts := []map[string]interface{}{}
+	if i.Debug {
+		controllerPorts = append(controllerPorts,
 			map[string]interface{}{
 				"containerPort": 40000,
 				"name":          "dlv",
@@ -254,7 +264,7 @@ func (i *Installer) InstallWireguardModule() error {
 								),
 								"imagePullPolicy": i.getImagePullPolicy(),
 								"name":            "api-server",
-								"ports":           ports,
+								"ports":           apiPorts,
 								"readinessProbe": map[string]interface{}{
 									"failureThreshold": 1,
 									"httpGet": map[string]interface{}{
@@ -498,6 +508,7 @@ func (i *Installer) InstallWireguardModule() error {
 								),
 								"imagePullPolicy": i.getImagePullPolicy(),
 								"name":            "wireguard-wireguard-controller",
+								"ports":           controllerPorts,
 								"readinessProbe": map[string]interface{}{
 									"failureThreshold": 1,
 									"httpGet": map[string]interface{}{
