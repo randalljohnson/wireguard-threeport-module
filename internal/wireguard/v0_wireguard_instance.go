@@ -4,6 +4,7 @@ package wireguard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	logr "github.com/go-logr/logr"
@@ -14,6 +15,7 @@ import (
 	tpclient_v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/client/v0"
 	tpapi "github.com/threeport/threeport/pkg/api/v0"
 	tpapi_v0 "github.com/threeport/threeport/pkg/api/v0"
+	tpclient_lib "github.com/threeport/threeport/pkg/client/lib/v0"
 	helmclient_v0 "github.com/threeport/threeport/pkg/client/v0"
 	tpclient "github.com/threeport/threeport/pkg/client/v0"
 	controller "github.com/threeport/threeport/pkg/controller/v0"
@@ -69,7 +71,7 @@ func v0WireguardInstanceCreated(
 
 	// Create the HelmWorkloadInstance using the client
 	createdInst, err := helmclient_v0.CreateHelmWorkloadInstance(r.APIClient, r.APIServer, helmWorkloadInst)
-	if err != nil {
+	if err != nil && !errors.Is(err, tpclient_lib.ErrConflict) {
 		return 0, fmt.Errorf("failed to create HelmWorkloadInstance: %w", err)
 	}
 
@@ -389,7 +391,7 @@ func configureSecurityListRules(
 	// Create worker subnet UDP ingress rule for Wireguard
 	wireguardWorkerRule := core.IngressSecurityRule{
 		Protocol:    common.String("17"), // UDP
-		Source:      common.String("0.0.0.0/0"),
+		Source:      common.String(*workerSubnet.CidrBlock),
 		Description: common.String("Allow Wireguard UDP traffic"),
 		UdpOptions: &core.UdpOptions{
 			DestinationPortRange: &core.PortRange{
