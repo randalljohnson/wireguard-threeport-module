@@ -270,7 +270,7 @@ func setupOciResources(
 	serviceList, err := kubeClient.Resource(serviceGVR).Namespace(*wireguardInstance.Name).List(
 		context.Background(),
 		metav1.ListOptions{
-			FieldSelector: "spec.type=loadbalancer",
+			FieldSelector: "spec.type=LoadBalancer",
 		},
 	)
 	if err != nil {
@@ -367,7 +367,7 @@ func configureSecurityListRules(
 		Protocol:    "17", // udp
 		Source:      "0.0.0.0/0",
 		Description: fmt.Sprintf("%s: allow wireguard udp traffic", getModulePrefix(wireguardInstance)),
-		Port:        setup.wireguardPort,
+		Port:        51820,
 	}
 	if err := manager.addSecurityRule(setup.lbSecurityList, lbRuleConfig); err != nil {
 		return fmt.Errorf("failed to add loadbalancer security rule: %w", err)
