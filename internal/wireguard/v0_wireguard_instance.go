@@ -34,45 +34,8 @@ func v0WireguardInstanceCreated(
 	wireguardInstance *v0.WireguardInstance,
 	log *logr.Logger,
 ) (int64, error) {
-
-	// get attached Kubernetes runtime instance ID
-	kubernetesRuntimeInstanceId, err := tpclient.GetObjectIdByAttachedObject(
-		r.APIClient,
-		r.APIServer,
-		tpapi.ObjectTypeKubernetesRuntimeInstance,
-		v0.ObjectTypeWireguardInstance,
-		*wireguardInstance.ID,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get Kubernetes runtime instance by attachment: %w", err)
-	}
-
-	// Get the associated WireguardDefinition
-	wireguardDef, err := tpclient_v0.GetWireguardDefinitionByID(r.APIClient, r.APIServer, *wireguardInstance.WireguardDefinitionID)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get WireguardDefinition: %w", err)
-	}
-
-	// Get the associated HelmWorkloadDefinition
-	helmWorkloadDef, err := helmclient_v0.GetHelmWorkloadDefinitionByName(r.APIClient, r.APIServer, *wireguardDef.Name)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get HelmWorkloadDefinition: %w", err)
-	}
-
-	// Create HelmWorkloadInstance for wg-portal
-	helmWorkloadInst := &tpapi_v0.HelmWorkloadInstance{
-		Instance: tpapi_v0.Instance{
-			Name: wireguardInstance.Name,
-		},
-		HelmWorkloadDefinitionID:    helmWorkloadDef.ID,
-		ValuesDocument:              helmWorkloadDef.ValuesDocument,
-		KubernetesRuntimeInstanceID: kubernetesRuntimeInstanceId,
-		ReleaseNamespace:            wireguardInstance.Name,
-	}
-
-	// Create the HelmWorkloadInstance using the client
-	createdInst, err := helmclient_v0.CreateHelmWorkloadInstance(r.APIClient, r.APIServer, helmWorkloadInst)
-	if err != nil && !errors.Is(err, tpclient_lib.ErrConflict) {
+	// Create HelmWorkloadInstance
+	if err := createHelmWorkloadInstance(r, wireguardInstance, log); err != nil {
 		return 0, fmt.Errorf("failed to create HelmWorkloadInstance: %w", err)
 	}
 
@@ -80,9 +43,6 @@ func v0WireguardInstanceCreated(
 	if err := configureSecurityListRules(r, wireguardInstance, log); err != nil {
 		return 0, fmt.Errorf("failed to configure security list rules: %w", err)
 	}
-
-	// Optionally, you can log or use the created instance
-	log.Info("created HelmWorkloadInstance", "name", createdInst.Name)
 
 	return 0, nil
 }
@@ -129,20 +89,16 @@ func v0WireguardInstanceDeleted(
 	wireguardInstance *v0.WireguardInstance,
 	log *logr.Logger,
 ) (int64, error) {
-	// Get the associated HelmWorkloadInstance by name
-	helmWorkloadInst, err := helmclient_v0.GetHelmWorkloadInstanceByName(r.APIClient, r.APIServer, *wireguardInstance.Name)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get HelmWorkloadInstance: %w", err)
+	// Remove security list rules first
+	if err := removeSecurityListRules(r, wireguardInstance, log); err != nil {
+		log.Error(err, "failed to remove security list rules, proceeding with HelmWorkloadInstance deletion")
+		// Continue with deletion even if security list removal fails
 	}
 
-	// Delete the HelmWorkloadInstance using the client
-	_, err = helmclient_v0.DeleteHelmWorkloadInstance(r.APIClient, r.APIServer, *helmWorkloadInst.ID)
-	if err != nil {
-		return 0, fmt.Errorf("failed to delete HelmWorkloadInstance: %w", err)
+	// Delete HelmWorkloadInstance
+	if err := cleanupHelmWorkloadInstance(r, wireguardInstance, log); err != nil {
+		return 0, fmt.Errorf("failed to cleanup HelmWorkloadInstance: %w", err)
 	}
-
-	// Optionally, you can log the deletion
-	log.Info("deleted HelmWorkloadInstance", "name", helmWorkloadInst.Name)
 
 	return 0, nil
 }
@@ -465,4 +421,81 @@ func getModulePrefix(
 		"wireguard-threeport-module",
 		*wireguardInstance.Name,
 	)
+}
+
+// createHelmWorkloadInstance creates a new HelmWorkloadInstance for the Wireguard instance
+func createHelmWorkloadInstance(
+	r *controller.Reconciler,
+	wireguardInstance *v0.WireguardInstance,
+	log *logr.Logger,
+) error {
+	// get attached Kubernetes runtime instance ID
+	kubernetesRuntimeInstanceId, err := tpclient.GetObjectIdByAttachedObject(
+		r.APIClient,
+		r.APIServer,
+		tpapi.ObjectTypeKubernetesRuntimeInstance,
+		v0.ObjectTypeWireguardInstance,
+		*wireguardInstance.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to get Kubernetes runtime instance by attachment: %w", err)
+	}
+
+	// Get the associated WireguardDefinition
+	wireguardDef, err := tpclient_v0.GetWireguardDefinitionByID(r.APIClient, r.APIServer, *wireguardInstance.WireguardDefinitionID)
+	if err != nil {
+		return fmt.Errorf("failed to get WireguardDefinition: %w", err)
+	}
+
+	// Get the associated HelmWorkloadDefinition
+	helmWorkloadDef, err := helmclient_v0.GetHelmWorkloadDefinitionByName(r.APIClient, r.APIServer, *wireguardDef.Name)
+	if err != nil {
+		return fmt.Errorf("failed to get HelmWorkloadDefinition: %w", err)
+	}
+
+	// Create HelmWorkloadInstance for wg-portal
+	helmWorkloadInst := &tpapi_v0.HelmWorkloadInstance{
+		Instance: tpapi_v0.Instance{
+			Name: wireguardInstance.Name,
+		},
+		HelmWorkloadDefinitionID:    helmWorkloadDef.ID,
+		ValuesDocument:              helmWorkloadDef.ValuesDocument,
+		KubernetesRuntimeInstanceID: kubernetesRuntimeInstanceId,
+		ReleaseNamespace:            wireguardInstance.Name,
+	}
+
+	// Create the HelmWorkloadInstance using the client
+	createdInst, err := helmclient_v0.CreateHelmWorkloadInstance(r.APIClient, r.APIServer, helmWorkloadInst)
+	if err != nil && !errors.Is(err, tpclient_lib.ErrConflict) {
+		return fmt.Errorf("failed to create HelmWorkloadInstance: %w", err)
+	}
+
+	log.Info("created HelmWorkloadInstance", "name", createdInst.Name)
+	return nil
+}
+
+// cleanupHelmWorkloadInstance deletes the HelmWorkloadInstance associated with the Wireguard instance
+func cleanupHelmWorkloadInstance(
+	r *controller.Reconciler,
+	wireguardInstance *v0.WireguardInstance,
+	log *logr.Logger,
+) error {
+	// Get the associated HelmWorkloadInstance by name
+	helmWorkloadInst, err := helmclient_v0.GetHelmWorkloadInstanceByName(r.APIClient, r.APIServer, *wireguardInstance.Name)
+	if err != nil {
+		if errors.Is(err, tpclient_lib.ErrObjectNotFound) {
+			// Instance already deleted, nothing to do
+			return nil
+		}
+		return fmt.Errorf("failed to get HelmWorkloadInstance: %w", err)
+	}
+
+	// Delete the HelmWorkloadInstance using the client
+	_, err = helmclient_v0.DeleteHelmWorkloadInstance(r.APIClient, r.APIServer, *helmWorkloadInst.ID)
+	if err != nil {
+		return fmt.Errorf("failed to delete HelmWorkloadInstance: %w", err)
+	}
+
+	log.Info("deleted HelmWorkloadInstance", "name", helmWorkloadInst.Name)
+	return nil
 }
