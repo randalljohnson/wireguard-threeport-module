@@ -3,11 +3,13 @@
 package wireguard
 
 import (
+	"errors"
 	"fmt"
 
 	logr "github.com/go-logr/logr"
 	v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/api/v0"
 	tpapi_v0 "github.com/threeport/threeport/pkg/api/v0"
+	tpclient_lib "github.com/threeport/threeport/pkg/client/lib/v0"
 	tpclient_v0 "github.com/threeport/threeport/pkg/client/v0"
 	controller "github.com/threeport/threeport/pkg/controller/v0"
 	util "github.com/threeport/threeport/pkg/util/v0"
@@ -41,7 +43,7 @@ func v0WireguardDefinitionCreated(
 
 	// Create the HelmWorkloadDefinition using the client
 	createdDef, err := tpclient_v0.CreateHelmWorkloadDefinition(r.APIClient, r.APIServer, helmWorkloadDef)
-	if err != nil {
+	if err != nil && !errors.Is(err, tpclient_lib.ErrConflict) {
 		return 0, fmt.Errorf("failed to create HelmWorkloadDefinition: %w", err)
 	}
 
