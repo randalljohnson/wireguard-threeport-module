@@ -415,12 +415,12 @@ func removeSecurityListRules(
 	}
 
 	// remove loadbalancer rule
-	if err := manager.removeSecurityRule(setup.lbSecurityList, getModulePrefix(wireguardInstance), setup.wireguardPort); err != nil {
+	if err := manager.removeSecurityRule(setup.lbSecurityList, getModulePrefix(wireguardInstance)); err != nil {
 		return fmt.Errorf("failed to remove loadbalancer security rule: %w", err)
 	}
 
 	// remove worker rule
-	if err := manager.removeSecurityRule(setup.workerSecurityList, getModulePrefix(wireguardInstance), setup.wireguardPort); err != nil {
+	if err := manager.removeSecurityRule(setup.workerSecurityList, getModulePrefix(wireguardInstance)); err != nil {
 		return fmt.Errorf("failed to remove worker security rule: %w", err)
 	}
 
@@ -570,16 +570,14 @@ func (m *SecurityListManager) addSecurityRule(securityList *core.SecurityList, c
 }
 
 // removeSecurityRule removes a security rule from a security list if it exists
-func (m *SecurityListManager) removeSecurityRule(securityList *core.SecurityList, descriptionPrefix string, port int32) error {
+func (m *SecurityListManager) removeSecurityRule(securityList *core.SecurityList, descriptionPrefix string) error {
 	var updatedRules []core.IngressSecurityRule
 	for _, rule := range securityList.IngressSecurityRules {
 		// skip rules that match both our description prefix and port
 		if rule.UdpOptions != nil &&
 			rule.UdpOptions.DestinationPortRange != nil &&
 			rule.Description != nil &&
-			strings.HasPrefix(*rule.Description, descriptionPrefix) &&
-			*rule.UdpOptions.DestinationPortRange.Min == int(port) &&
-			*rule.UdpOptions.DestinationPortRange.Max == int(port) {
+			strings.HasPrefix(*rule.Description, descriptionPrefix) {
 			continue
 		}
 
