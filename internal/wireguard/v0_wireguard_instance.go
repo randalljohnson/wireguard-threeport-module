@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	logr "github.com/go-logr/logr"
 	"github.com/oracle/oci-go-sdk/v65/common"
@@ -363,54 +364,84 @@ func configureSecurityListRules(
 		return fmt.Errorf("failed to get load balancer subnet security list: %w", err)
 	}
 
-	// Create load balancer subnet UDP ingress rule for Wireguard
-	wireguardLoadBalancerRule := core.IngressSecurityRule{
-		Protocol:    common.String("17"), // UDP
-		Source:      common.String("0.0.0.0/0"),
-		Description: common.String("Allow Wireguard UDP traffic"),
-		UdpOptions: &core.UdpOptions{
-			DestinationPortRange: &core.PortRange{
-				Min: common.Int(int(51820)),
-				Max: common.Int(int(51820)),
-			},
-		},
+	// check if the security list already has a rule for the wireguard port
+	hasLoadBalancerRule := false
+	for _, rule := range lbSecurityList.IngressSecurityRules {
+		if rule.UdpOptions != nil && rule.UdpOptions.DestinationPortRange != nil {
+			if *rule.UdpOptions.DestinationPortRange.Min == int(wireguardPort) &&
+				*rule.UdpOptions.DestinationPortRange.Max == int(wireguardPort) &&
+				strings.HasPrefix(*rule.Description, getModulePrefix(wireguardInstance)) {
+				log.Info("security list already has a rule for the wireguard port", "port", wireguardPort)
+				hasLoadBalancerRule = true
+			}
+		}
 	}
 
-	// Update load balancer subnet security list
-	lbRules := append(lbSecurityList.IngressSecurityRules, wireguardLoadBalancerRule)
-	_, err = vcnClient.UpdateSecurityList(context.Background(), core.UpdateSecurityListRequest{
-		SecurityListId: &lbSubnet.SecurityListIds[0],
-		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
-			IngressSecurityRules: lbRules,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to update load balancer subnet security list: %w", err)
+	// Create load balancer subnet UDP ingress rule for Wireguard
+	if !hasLoadBalancerRule {
+		wireguardLoadBalancerRule := core.IngressSecurityRule{
+			Protocol:    common.String("17"), // UDP
+			Source:      common.String("0.0.0.0/0"),
+			Description: common.String(fmt.Sprintf("%s: Allow Wireguard UDP traffic", getModulePrefix(wireguardInstance))),
+			UdpOptions: &core.UdpOptions{
+				DestinationPortRange: &core.PortRange{
+					Min: common.Int(int(51820)),
+					Max: common.Int(int(51820)),
+				},
+			},
+		}
+
+		// Update load balancer subnet security list
+		lbRules := append(lbSecurityList.IngressSecurityRules, wireguardLoadBalancerRule)
+		_, err = vcnClient.UpdateSecurityList(context.Background(), core.UpdateSecurityListRequest{
+			SecurityListId: &lbSubnet.SecurityListIds[0],
+			UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+				IngressSecurityRules: lbRules,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to update load balancer subnet security list: %w", err)
+		}
 	}
 
 	// Create worker subnet UDP ingress rule for Wireguard
-	wireguardWorkerRule := core.IngressSecurityRule{
-		Protocol:    common.String("17"), // UDP
-		Source:      common.String(*workerSubnet.CidrBlock),
-		Description: common.String("Allow Wireguard UDP traffic"),
-		UdpOptions: &core.UdpOptions{
-			DestinationPortRange: &core.PortRange{
-				Min: common.Int(int(wireguardPort)),
-				Max: common.Int(int(wireguardPort)),
-			},
-		},
+	hasWorkerRule := false
+	for _, rule := range workerSecurityList.IngressSecurityRules {
+		if rule.UdpOptions != nil && rule.UdpOptions.DestinationPortRange != nil {
+			if *rule.UdpOptions.DestinationPortRange.Min == int(wireguardPort) &&
+				*rule.UdpOptions.DestinationPortRange.Max == int(wireguardPort) &&
+				strings.HasPrefix(*rule.Description, getModulePrefix(wireguardInstance)) {
+				log.Info("security list already has a rule for the wireguard port", "port", wireguardPort)
+				hasWorkerRule = true
+			}
+		}
 	}
 
-	// Update worker subnet security list
-	workerRules := append(workerSecurityList.IngressSecurityRules, wireguardWorkerRule)
-	_, err = vcnClient.UpdateSecurityList(context.Background(), core.UpdateSecurityListRequest{
-		SecurityListId: &workerSubnet.SecurityListIds[0],
-		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
-			IngressSecurityRules: workerRules,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to update worker subnet security list: %w", err)
+	// Create worker subnet UDP ingress rule for Wireguard
+	if !hasWorkerRule {
+		wireguardWorkerRule := core.IngressSecurityRule{
+			Protocol:    common.String("17"), // UDP
+			Source:      common.String(*workerSubnet.CidrBlock),
+			Description: common.String(fmt.Sprintf("%s: Allow Wireguard UDP traffic", getModulePrefix(wireguardInstance))),
+			UdpOptions: &core.UdpOptions{
+				DestinationPortRange: &core.PortRange{
+					Min: common.Int(int(wireguardPort)),
+					Max: common.Int(int(wireguardPort)),
+				},
+			},
+		}
+
+		// Update worker subnet security list
+		workerRules := append(workerSecurityList.IngressSecurityRules, wireguardWorkerRule)
+		_, err = vcnClient.UpdateSecurityList(context.Background(), core.UpdateSecurityListRequest{
+			SecurityListId: &workerSubnet.SecurityListIds[0],
+			UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+				IngressSecurityRules: workerRules,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to update worker subnet security list: %w", err)
+		}
 	}
 
 	log.Info("successfully configured security list rules for Wireguard",
@@ -421,4 +452,17 @@ func configureSecurityListRules(
 	)
 
 	return nil
+}
+
+// todo: how should this include the control plane instance name?
+// getModulePrefix returns a prefixed string for the module
+func getModulePrefix(
+	// controlPlaneInstance *tpapi.ControlPlaneInstance,
+	wireguardInstance *v0.WireguardInstance,
+) string {
+	return fmt.Sprintf(
+		"%s/%s",
+		"wireguard-threeport-module",
+		*wireguardInstance.Name,
+	)
 }
