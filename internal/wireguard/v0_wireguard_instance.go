@@ -415,12 +415,12 @@ func removeSecurityListRules(
 	}
 
 	// remove loadbalancer rule
-	if err := manager.removeSecurityRule(setup.lbSecurityList, getModulePrefix(wireguardInstance)); err != nil {
+	if err := manager.removeSecurityRules(setup.lbSecurityList, getModulePrefix(wireguardInstance)); err != nil {
 		return fmt.Errorf("failed to remove loadbalancer security rule: %w", err)
 	}
 
 	// remove worker rule
-	if err := manager.removeSecurityRule(setup.workerSecurityList, getModulePrefix(wireguardInstance)); err != nil {
+	if err := manager.removeSecurityRules(setup.workerSecurityList, getModulePrefix(wireguardInstance)); err != nil {
 		return fmt.Errorf("failed to remove worker security rule: %w", err)
 	}
 
@@ -569,8 +569,9 @@ func (m *SecurityListManager) addSecurityRule(securityList *core.SecurityList, c
 	return nil
 }
 
-// removeSecurityRule removes a security rule from a security list if it exists
-func (m *SecurityListManager) removeSecurityRule(securityList *core.SecurityList, descriptionPrefix string) error {
+// removeSecurityRules removes security rules matching the description prefix for a given
+// security list
+func (m *SecurityListManager) removeSecurityRules(securityList *core.SecurityList, descriptionPrefix string) error {
 	var updatedRules []core.IngressSecurityRule
 	for _, rule := range securityList.IngressSecurityRules {
 		// skip rules that match both our description prefix and port
