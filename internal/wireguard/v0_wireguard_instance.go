@@ -129,6 +129,7 @@ type SecurityRuleConfig struct {
 	Direction   string // "ingress" or "egress"
 }
 
+// define constants for security list rules
 const (
 	SecurityRuleDirectionIngress = "ingress"
 	SecurityRuleDirectionEgress  = "egress"
