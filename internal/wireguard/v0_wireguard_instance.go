@@ -500,7 +500,7 @@ func configureSecurityListRules(
 		return fmt.Errorf("failed to add worker ingress security rule: %w", err)
 	}
 
-	// add worker egress rule to internet
+	// add worker egress rule
 	workerEgressRuleConfig := SecurityRuleConfig{
 		Protocol:    SecurityRuleProtocolAll,
 		Destination: "0.0.0.0/0",
