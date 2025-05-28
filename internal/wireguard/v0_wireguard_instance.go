@@ -427,7 +427,7 @@ func configureSecurityListRules(
 	workerEgressRuleConfig := SecurityRuleConfig{
 		Protocol:    SecurityRuleProtocolAll,
 		Destination: "0.0.0.0/0",
-		Description: fmt.Sprintf("%s: Allow Wireguard UDP traffic to internet", getModulePrefix(wireguardInstance)),
+		Description: fmt.Sprintf("%s: Allow Wireguard traffic to internet", getModulePrefix(wireguardInstance)),
 		Direction:   SecurityRuleDirectionEgress,
 	}
 	if err := manager.addSecurityRule(setup.workerSecurityList, workerEgressRuleConfig); err != nil {
@@ -644,7 +644,7 @@ func (m *SecurityListManager) addSecurityRule(securityList *core.SecurityList, c
 // findExistingRule checks if a rule already exists in security list
 func (m *SecurityListManager) findExistingRule(rules []core.IngressSecurityRule, description string, port int32) bool {
 	for _, rule := range rules {
-		if *rule.Description == description {
+		if rule.Description != nil && *rule.Description == description {
 			return true
 		}
 	}
@@ -654,7 +654,7 @@ func (m *SecurityListManager) findExistingRule(rules []core.IngressSecurityRule,
 // findExistingEgressRule checks if an egress rule already exists in security list
 func (m *SecurityListManager) findExistingEgressRule(rules []core.EgressSecurityRule, description string, port int32) bool {
 	for _, rule := range rules {
-		if *rule.Description == description {
+		if rule.Description != nil && *rule.Description == description {
 			return true
 		}
 	}
