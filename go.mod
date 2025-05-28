@@ -2,7 +2,7 @@ module github.com/randalljohnson/wireguard-threeport-module
 
 go 1.24.2
 
-replace github.com/threeport/threeport => ../../workspaces/add-oracle-provider/threeport
+replace github.com/threeport/threeport => ../../workspaces/fix-helm-workload-namespace-param/threeport
 
 require (
 	github.com/ghodss/yaml v1.0.0
