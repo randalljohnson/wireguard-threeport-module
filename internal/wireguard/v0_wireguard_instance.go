@@ -54,7 +54,7 @@ func v0WireguardInstanceUpdated(
 	wireguardInstance *v0.WireguardInstance,
 	log *logr.Logger,
 ) (int64, error) {
-	// get helm workload instance
+	// get HelmWorkloadInstance
 	helmWorkloadInst, err := helmclient_v0.GetHelmWorkloadInstanceByName(r.APIClient, r.APIServer, *wireguardInstance.Name)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get HelmWorkloadInstance: %w", err)
@@ -70,7 +70,7 @@ func v0WireguardInstanceUpdated(
 	// update values
 	helmWorkloadInst.ValuesDocument = &valuesStr
 
-	// update instance
+	// update HelmWorkloadInstance
 	updatedInst, err := helmclient_v0.UpdateHelmWorkloadInstance(r.APIClient, r.APIServer, helmWorkloadInst)
 	if err != nil {
 		return 0, fmt.Errorf("failed to update HelmWorkloadInstance: %w", err)
@@ -89,7 +89,7 @@ func v0WireguardInstanceDeleted(
 	wireguardInstance *v0.WireguardInstance,
 	log *logr.Logger,
 ) (int64, error) {
-	// Remove security list rules first
+	// remove security list rules
 	if err := removeSecurityListRules(r, wireguardInstance, log); err != nil {
 		log.Error(err, "failed to remove security list rules, proceeding with HelmWorkloadInstance deletion")
 	}
@@ -102,7 +102,7 @@ func v0WireguardInstanceDeleted(
 	return 0, nil
 }
 
-// OciSetup holds all the necessary OCI clients and resources
+// OciSetup holds all necessary OCI clients and resources
 type OciSetup struct {
 	vcnClient          core.VirtualNetworkClient
 	containerClient    containerengine.ContainerEngineClient
@@ -112,6 +112,29 @@ type OciSetup struct {
 	lbSecurityList     *core.SecurityList
 	workerSecurityList *core.SecurityList
 }
+
+// SecurityListManager manages security list rules
+type SecurityListManager struct {
+	vcnClient *core.VirtualNetworkClient
+	log       *logr.Logger
+}
+
+// SecurityRuleConfig represents configuration for a security rule
+type SecurityRuleConfig struct {
+	Protocol    string
+	Source      string
+	Destination string
+	Description string
+	Port        int32
+	Direction   string // "ingress" or "egress"
+}
+
+const (
+	SecurityRuleDirectionIngress = "ingress"
+	SecurityRuleDirectionEgress  = "egress"
+	SecurityRuleProtocolUDP      = "17"
+	SecurityRuleProtocolAll      = "all"
+)
 
 // setupOciResources initializes OCI clients and retrieves necessary resources
 func setupOciResources(
@@ -151,7 +174,7 @@ func setupOciResources(
 		return nil, fmt.Errorf("failed to get kubernetes runtime definition: %w", err)
 	}
 
-	// check oci provider
+	// check infra provider
 	if *kubernetesRuntimeDef.InfraProvider != tpapi_v0.KubernetesRuntimeInfraProviderOKE {
 		return nil, fmt.Errorf("only oke is supported")
 	}
@@ -230,7 +253,7 @@ func setupOciResources(
 	// get worker subnet
 	var workerSubnet *core.Subnet
 	for _, nodePool := range nodePools.Items {
-		if nodePool.SubnetIds != nil && len(nodePool.SubnetIds) > 0 {
+		if len(nodePool.SubnetIds) > 0 {
 			workerSubnetID := nodePool.SubnetIds[0]
 			workerSubnetResp, err := vcnClient.GetSubnet(context.Background(), core.GetSubnetRequest{
 				SubnetId: &workerSubnetID,
@@ -290,6 +313,7 @@ func setupOciResources(
 		return nil, fmt.Errorf("failed to get ports from service: %w", err)
 	}
 
+	// get wireguard port
 	var wireguardPort int32
 	for _, port := range ports {
 		portMap, ok := port.(map[string]interface{})
@@ -312,7 +336,7 @@ func setupOciResources(
 		return nil, fmt.Errorf("failed to find wireguard port in service")
 	}
 
-	// get security lists for both subnets
+	// check for empty security lists
 	if len(workerSubnet.SecurityListIds) == 0 {
 		return nil, fmt.Errorf("worker subnet has no security lists")
 	}
@@ -320,6 +344,7 @@ func setupOciResources(
 		return nil, fmt.Errorf("loadbalancer subnet has no security lists")
 	}
 
+	// get security lists
 	workerSecurityList, err := vcnClient.GetSecurityList(context.Background(), core.GetSecurityListRequest{
 		SecurityListId: &workerSubnet.SecurityListIds[0],
 	})
@@ -345,7 +370,7 @@ func setupOciResources(
 	}, nil
 }
 
-// configureSecurityListRules configures the necessary security list rules for Wireguard
+// configureSecurityListRules configures necessary security list rules for Wireguard
 func configureSecurityListRules(
 	r *controller.Reconciler,
 	wireguardInstance *v0.WireguardInstance,
@@ -376,11 +401,11 @@ func configureSecurityListRules(
 
 	// add loadbalancer egress rule to worker subnet
 	lbEgressRuleConfig := SecurityRuleConfig{
-		Protocol:    "17", // udp
+		Protocol:    SecurityRuleProtocolUDP,
 		Destination: *setup.workerSubnet.CidrBlock,
 		Description: fmt.Sprintf("%s: Allow Wireguard UDP traffic to worker subnet", getModulePrefix(wireguardInstance)),
 		Port:        setup.wireguardPort,
-		Direction:   "egress",
+		Direction:   SecurityRuleDirectionEgress,
 	}
 	if err := manager.addSecurityRule(setup.lbSecurityList, lbEgressRuleConfig); err != nil {
 		return fmt.Errorf("failed to add loadbalancer egress security rule: %w", err)
@@ -388,11 +413,11 @@ func configureSecurityListRules(
 
 	// add worker ingress rule
 	workerIngressRuleConfig := SecurityRuleConfig{
-		Protocol:    "17", // udp
+		Protocol:    SecurityRuleProtocolUDP,
 		Source:      *setup.workerSubnet.CidrBlock,
 		Description: fmt.Sprintf("%s: Allow Wireguard UDP traffic", getModulePrefix(wireguardInstance)),
 		Port:        setup.wireguardPort,
-		Direction:   "ingress",
+		Direction:   SecurityRuleDirectionIngress,
 	}
 	if err := manager.addSecurityRule(setup.workerSecurityList, workerIngressRuleConfig); err != nil {
 		return fmt.Errorf("failed to add worker ingress security rule: %w", err)
@@ -400,10 +425,10 @@ func configureSecurityListRules(
 
 	// add worker egress rule to internet
 	workerEgressRuleConfig := SecurityRuleConfig{
-		Protocol:    "all", // udp
+		Protocol:    SecurityRuleProtocolAll,
 		Destination: "0.0.0.0/0",
 		Description: fmt.Sprintf("%s: Allow Wireguard UDP traffic to internet", getModulePrefix(wireguardInstance)),
-		Direction:   "egress",
+		Direction:   SecurityRuleDirectionEgress,
 	}
 	if err := manager.addSecurityRule(setup.workerSecurityList, workerEgressRuleConfig); err != nil {
 		return fmt.Errorf("failed to add worker egress security rule: %w", err)
@@ -419,7 +444,7 @@ func configureSecurityListRules(
 	return nil
 }
 
-// removeSecurityListRules removes the security list rules for Wireguard
+// removeSecurityListRules removes security list rules for Wireguard
 func removeSecurityListRules(
 	r *controller.Reconciler,
 	wireguardInstance *v0.WireguardInstance,
@@ -471,7 +496,7 @@ func getModulePrefix(
 	)
 }
 
-// createHelmWorkloadInstance creates a new HelmWorkloadInstance for the Wireguard instance
+// createHelmWorkloadInstance creates a new HelmWorkloadInstance for a Wireguard instance
 func createHelmWorkloadInstance(
 	r *controller.Reconciler,
 	wireguardInstance *v0.WireguardInstance,
@@ -489,19 +514,19 @@ func createHelmWorkloadInstance(
 		return fmt.Errorf("failed to get Kubernetes runtime instance by attachment: %w", err)
 	}
 
-	// Get the associated WireguardDefinition
+	// get associated WireguardDefinition
 	wireguardDef, err := tpclient_v0.GetWireguardDefinitionByID(r.APIClient, r.APIServer, *wireguardInstance.WireguardDefinitionID)
 	if err != nil {
 		return fmt.Errorf("failed to get WireguardDefinition: %w", err)
 	}
 
-	// Get the associated HelmWorkloadDefinition
+	// get associated HelmWorkloadDefinition
 	helmWorkloadDef, err := helmclient_v0.GetHelmWorkloadDefinitionByName(r.APIClient, r.APIServer, *wireguardDef.Name)
 	if err != nil {
 		return fmt.Errorf("failed to get HelmWorkloadDefinition: %w", err)
 	}
 
-	// Create HelmWorkloadInstance for wg-portal
+	// create HelmWorkloadInstance for wg-portal chart
 	helmWorkloadInst := &tpapi_v0.HelmWorkloadInstance{
 		Instance: tpapi_v0.Instance{
 			Name: wireguardInstance.Name,
@@ -512,7 +537,7 @@ func createHelmWorkloadInstance(
 		ReleaseNamespace:            wireguardInstance.Name,
 	}
 
-	// Create the HelmWorkloadInstance using the client
+	// create HelmWorkloadInstance
 	createdInst, err := helmclient_v0.CreateHelmWorkloadInstance(r.APIClient, r.APIServer, helmWorkloadInst)
 	if err != nil && !errors.Is(err, tpclient_lib.ErrConflict) {
 		return fmt.Errorf("failed to create HelmWorkloadInstance: %w", err)
@@ -522,23 +547,23 @@ func createHelmWorkloadInstance(
 	return nil
 }
 
-// cleanupHelmWorkloadInstance deletes the HelmWorkloadInstance associated with the Wireguard instance
+// cleanupHelmWorkloadInstance deletes a HelmWorkloadInstance associated with a Wireguard instance
 func cleanupHelmWorkloadInstance(
 	r *controller.Reconciler,
 	wireguardInstance *v0.WireguardInstance,
 	log *logr.Logger,
 ) error {
-	// Get the associated HelmWorkloadInstance by name
+	// get associated HelmWorkloadInstance by name
 	helmWorkloadInst, err := helmclient_v0.GetHelmWorkloadInstanceByName(r.APIClient, r.APIServer, *wireguardInstance.Name)
 	if err != nil {
 		if errors.Is(err, tpclient_lib.ErrObjectNotFound) {
-			// Instance already deleted, nothing to do
+			// instance already deleted, nothing to do
 			return nil
 		}
 		return fmt.Errorf("failed to get HelmWorkloadInstance: %w", err)
 	}
 
-	// Delete the HelmWorkloadInstance using the client
+	// delete HelmWorkloadInstance
 	_, err = helmclient_v0.DeleteHelmWorkloadInstance(r.APIClient, r.APIServer, *helmWorkloadInst.ID)
 	if err != nil {
 		return fmt.Errorf("failed to delete HelmWorkloadInstance: %w", err)
@@ -548,28 +573,12 @@ func cleanupHelmWorkloadInstance(
 	return nil
 }
 
-// SecurityListManager manages security list rules
-type SecurityListManager struct {
-	vcnClient *core.VirtualNetworkClient
-	log       *logr.Logger
-}
-
-// SecurityRuleConfig represents the configuration for a security rule
-type SecurityRuleConfig struct {
-	Protocol    string
-	Source      string
-	Destination string // Added for egress rules
-	Description string
-	Port        int32
-	Direction   string // "ingress" or "egress"
-}
-
 // addSecurityRule adds a new security rule to a security list if it doesn't exist
 func (m *SecurityListManager) addSecurityRule(securityList *core.SecurityList, config SecurityRuleConfig) error {
 	var updateDetails core.UpdateSecurityListDetails
 
 	switch config.Direction {
-	case "ingress":
+	case SecurityRuleDirectionIngress:
 		if m.findExistingRule(securityList.IngressSecurityRules, config.Description, config.Port) {
 			return nil
 		}
@@ -591,7 +600,7 @@ func (m *SecurityListManager) addSecurityRule(securityList *core.SecurityList, c
 			IngressSecurityRules: rules,
 		}
 
-	case "egress":
+	case SecurityRuleDirectionEgress:
 		if m.findExistingEgressRule(securityList.EgressSecurityRules, config.Description, config.Port) {
 			return nil
 		}
@@ -603,7 +612,7 @@ func (m *SecurityListManager) addSecurityRule(securityList *core.SecurityList, c
 		}
 
 		// if port is unset (e.g. 0), we allow all protocols to all ports
-		if config.Protocol == "17" && config.Port != 0 { // udp
+		if config.Protocol == SecurityRuleProtocolUDP && config.Port != 0 {
 			newRule.UdpOptions = &core.UdpOptions{
 				DestinationPortRange: &core.PortRange{
 					Min: common.Int(int(config.Port)),
@@ -632,29 +641,21 @@ func (m *SecurityListManager) addSecurityRule(securityList *core.SecurityList, c
 	return nil
 }
 
-// findExistingRule checks if a rule already exists in the security list
+// findExistingRule checks if a rule already exists in security list
 func (m *SecurityListManager) findExistingRule(rules []core.IngressSecurityRule, description string, port int32) bool {
 	for _, rule := range rules {
-		if rule.UdpOptions != nil && rule.UdpOptions.DestinationPortRange != nil {
-			if *rule.UdpOptions.DestinationPortRange.Min == int(port) &&
-				*rule.UdpOptions.DestinationPortRange.Max == int(port) &&
-				*rule.Description == description {
-				return true
-			}
+		if *rule.Description == description {
+			return true
 		}
 	}
 	return false
 }
 
-// findExistingEgressRule checks if an egress rule already exists in the security list
+// findExistingEgressRule checks if an egress rule already exists in security list
 func (m *SecurityListManager) findExistingEgressRule(rules []core.EgressSecurityRule, description string, port int32) bool {
 	for _, rule := range rules {
-		if rule.UdpOptions != nil && rule.UdpOptions.DestinationPortRange != nil {
-			if *rule.UdpOptions.DestinationPortRange.Min == int(port) &&
-				*rule.UdpOptions.DestinationPortRange.Max == int(port) &&
-				*rule.Description == description {
-				return true
-			}
+		if *rule.Description == description {
+			return true
 		}
 	}
 	return false
@@ -663,24 +664,20 @@ func (m *SecurityListManager) findExistingEgressRule(rules []core.EgressSecurity
 // removeSecurityRules removes security rules matching the description prefix for a given
 // security list
 func (m *SecurityListManager) removeSecurityRules(securityList *core.SecurityList, descriptionPrefix string) error {
-	// Handle ingress rules
+	// handle ingress rules
 	var updatedIngressRules []core.IngressSecurityRule
 	for _, rule := range securityList.IngressSecurityRules {
-		if rule.UdpOptions != nil &&
-			rule.UdpOptions.DestinationPortRange != nil &&
-			rule.Description != nil &&
+		if rule.Description != nil &&
 			strings.HasPrefix(*rule.Description, descriptionPrefix) {
 			continue
 		}
 		updatedIngressRules = append(updatedIngressRules, rule)
 	}
 
-	// Handle egress rules
+	// handle egress rules
 	var updatedEgressRules []core.EgressSecurityRule
 	for _, rule := range securityList.EgressSecurityRules {
-		if rule.UdpOptions != nil &&
-			rule.UdpOptions.DestinationPortRange != nil &&
-			rule.Description != nil &&
+		if rule.Description != nil &&
 			strings.HasPrefix(*rule.Description, descriptionPrefix) {
 			continue
 		}
