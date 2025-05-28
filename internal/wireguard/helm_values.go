@@ -68,7 +68,7 @@ $IPT -I INPUT 1 -i $IN_FACE -p udp --dport $WG_PORT -j ACCEPT`
 		},
 	}
 
-	// Calculate hash of ConfigMaps, which will trigger a pod restart
+	// calculate hash of ConfigMaps, which will trigger a pod restart
 	// on changes made to wireguard config
 	configMapHash := calculateConfigMapHash(extraDeploy)
 
@@ -163,7 +163,7 @@ wg set wg0 private-key /data/wireguard-private-key/privatekey
 func calculateConfigMapHash(extraDeploy []interface{}) string {
 	var configMaps []map[string]interface{}
 
-	// Extract ConfigMap objects from extraDeploy
+	// extract ConfigMap objects from extraDeploy
 	for _, obj := range extraDeploy {
 		if objMap, ok := obj.(map[string]interface{}); ok {
 			if kind, ok := objMap["kind"].(string); ok && kind == "ConfigMap" {
@@ -172,14 +172,13 @@ func calculateConfigMapHash(extraDeploy []interface{}) string {
 		}
 	}
 
-	// Sort configMaps by name to ensure consistent hashing
-	// Convert to JSON for hashing
+	// convert to JSON for hashing
 	jsonBytes, err := json.Marshal(configMaps)
 	if err != nil {
 		return ""
 	}
 
-	// Calculate SHA-256 hash
+	// calculate SHA-256 hash
 	hash := sha256.Sum256(jsonBytes)
 	return hex.EncodeToString(hash[:])
 }
