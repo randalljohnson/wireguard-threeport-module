@@ -3,10 +3,6 @@
 package wireguard
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-
 	logr "github.com/go-logr/logr"
 	v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/api/v0"
 	controller "github.com/threeport/threeport/pkg/controller/v0"
@@ -40,29 +36,4 @@ func v0WireguardInstanceDeleted(
 	log *logr.Logger,
 ) (int64, error) {
 	return 0, nil
-}
-
-// calculateConfigMapHash calculates a hash of all ConfigMap objects in the extraDeploy list
-func calculateConfigMapHash(extraDeploy []interface{}) string {
-	var configMaps []map[string]interface{}
-
-	// Extract ConfigMap objects from extraDeploy
-	for _, obj := range extraDeploy {
-		if objMap, ok := obj.(map[string]interface{}); ok {
-			if kind, ok := objMap["kind"].(string); ok && kind == "ConfigMap" {
-				configMaps = append(configMaps, objMap)
-			}
-		}
-	}
-
-	// Sort configMaps by name to ensure consistent hashing
-	// Convert to JSON for hashing
-	jsonBytes, err := json.Marshal(configMaps)
-	if err != nil {
-		return ""
-	}
-
-	// Calculate SHA-256 hash
-	hash := sha256.Sum256(jsonBytes)
-	return hex.EncodeToString(hash[:])
 }
