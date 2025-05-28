@@ -398,6 +398,17 @@ func configureSecurityListRules(
 		return fmt.Errorf("failed to add worker ingress security rule: %w", err)
 	}
 
+	// add worker egress rule to internet
+	workerEgressRuleConfig := SecurityRuleConfig{
+		Protocol:    "all", // udp
+		Destination: "0.0.0.0/0",
+		Description: fmt.Sprintf("%s: Allow Wireguard UDP traffic to internet", getModulePrefix(wireguardInstance)),
+		Direction:   "egress",
+	}
+	if err := manager.addSecurityRule(setup.workerSecurityList, workerEgressRuleConfig); err != nil {
+		return fmt.Errorf("failed to add worker egress security rule: %w", err)
+	}
+
 	log.Info("successfully configured security list rules for wireguard",
 		"instance", *wireguardInstance.Name,
 		"port", setup.wireguardPort,
@@ -589,12 +600,16 @@ func (m *SecurityListManager) addSecurityRule(securityList *core.SecurityList, c
 			Protocol:    common.String(config.Protocol),
 			Destination: common.String(config.Destination),
 			Description: common.String(config.Description),
-			UdpOptions: &core.UdpOptions{
+		}
+
+		// if port is unset (e.g. 0), we allow all protocols to all ports
+		if config.Protocol == "17" && config.Port != 0 { // udp
+			newRule.UdpOptions = &core.UdpOptions{
 				DestinationPortRange: &core.PortRange{
 					Min: common.Int(int(config.Port)),
 					Max: common.Int(int(config.Port)),
 				},
-			},
+			}
 		}
 
 		rules := append(securityList.EgressSecurityRules, newRule)
