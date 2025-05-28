@@ -389,7 +389,7 @@ func configureSecurityListRules(
 
 	// add loadbalancer ingress rule
 	lbIngressRuleConfig := SecurityRuleConfig{
-		Protocol:    "17", // udp
+		Protocol:    SecurityRuleProtocolUDP,
 		Source:      "0.0.0.0/0",
 		Description: fmt.Sprintf("%s: Allow Wireguard UDP traffic", getModulePrefix(wireguardInstance)),
 		Port:        51820,
