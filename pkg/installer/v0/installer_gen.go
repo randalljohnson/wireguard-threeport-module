@@ -9,6 +9,8 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"net/http"
+
 	api_v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/api/v0"
 	tp_api "github.com/threeport/threeport/pkg/api/v0"
 	tp_auth "github.com/threeport/threeport/pkg/auth/v0"
@@ -22,11 +24,10 @@ import (
 	unstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	dynamic "k8s.io/client-go/dynamic"
-	"net/http"
 )
 
 const (
-	ReleaseImageRepo          = "docker.io/rj9317/wireguard-threeport-module"
+	ReleaseImageRepo          = "docker.io/rj9317"
 	DevImageRepo              = "localhost:5001"
 	DbInitFilename            = "db.sql"
 	DbInitLocation            = "/etc/threeport/db-create"
@@ -62,6 +63,9 @@ type Installer struct {
 
 	// If true, auth is enabled on Threeport API.
 	AuthEnabled bool
+
+	// If true, module is deployed with delve (debugger).
+	Debug bool
 }
 
 // NewInstaller returns a wireguard module installer with default values.
@@ -168,11 +172,50 @@ func (i *Installer) InstallWireguardModule() error {
 		return fmt.Errorf("failed to create/update wireguard DB initialization configmap: %w", err)
 	}
 
+	// configure ports
+	apiPorts := []map[string]interface{}{
+		{
+			"containerPort": 1323,
+			"name":          "api",
+			"protocol":      "TCP",
+		},
+	}
+	if i.Debug {
+		apiPorts = append(apiPorts,
+			map[string]interface{}{
+				"containerPort": 40000,
+				"name":          "dlv",
+				"protocol":      "TCP",
+			})
+	}
+
+	controllerPorts := []map[string]interface{}{}
+	if i.Debug {
+		controllerPorts = append(controllerPorts,
+			map[string]interface{}{
+				"containerPort": 40000,
+				"name":          "dlv",
+				"protocol":      "TCP",
+			})
+	}
+
 	// install wireguard API server deployment
 	apiArgs := []interface{}{"-auto-migrate=true"}
 	if !i.AuthEnabled {
 		apiArgs = append(apiArgs, "-auth-enabled=false")
 	}
+
+	if i.Debug {
+		apiArgs = append(
+			[]interface{}{"--"},
+			apiArgs...,
+		)
+		apiArgs = append(
+			util.StringToInterfaceList(i.getDelveArgs("rest-api")),
+			apiArgs...,
+		)
+	}
+
 	var wireguardApiDeploy = &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "apps/v1",
@@ -205,10 +248,8 @@ func (i *Installer) InstallWireguardModule() error {
 					"spec": map[string]interface{}{
 						"containers": []interface{}{
 							map[string]interface{}{
-								"args": apiArgs,
-								"command": []interface{}{
-									"/rest-api",
-								},
+								"args":    apiArgs,
+								"command": i.getCommand("rest-api"),
 								"envFrom": []interface{}{
 									map[string]interface{}{
 										"secretRef": map[string]interface{}{
@@ -221,15 +262,9 @@ func (i *Installer) InstallWireguardModule() error {
 									i.ControlPlaneImageRepo,
 									i.ControlPlaneImageTag,
 								),
-								"imagePullPolicy": "IfNotPresent",
+								"imagePullPolicy": i.getImagePullPolicy(),
 								"name":            "api-server",
-								"ports": []interface{}{
-									map[string]interface{}{
-										"containerPort": 1323,
-										"name":          "api",
-										"protocol":      "TCP",
-									},
-								},
+								"ports":           apiPorts,
 								"readinessProbe": map[string]interface{}{
 									"failureThreshold": 1,
 									"httpGet": map[string]interface{}{
@@ -262,7 +297,7 @@ func (i *Installer) InstallWireguardModule() error {
 									fmt.Sprintf("cockroach sql --certs-dir=/etc/threeport/db-certs --host crdb.%s.svc.cluster.local --port 26257 -f /etc/threeport/db-create/db.sql", i.ThreeportNamespace),
 								},
 								"image":           "cockroachdb/cockroach:v23.1.14",
-								"imagePullPolicy": "IfNotPresent",
+								"imagePullPolicy": i.getImagePullPolicy(),
 								"name":            "db-init",
 								"volumeMounts": []interface{}{
 									map[string]interface{}{
@@ -288,7 +323,7 @@ func (i *Installer) InstallWireguardModule() error {
 									i.ControlPlaneImageRepo,
 									i.ControlPlaneImageTag,
 								),
-								"imagePullPolicy": "IfNotPresent",
+								"imagePullPolicy": i.getImagePullPolicy(),
 								"name":            "database-migrator",
 								"volumeMounts": []interface{}{
 									map[string]interface{}{
@@ -414,6 +449,12 @@ func (i *Installer) InstallWireguardModule() error {
 	if !i.AuthEnabled {
 		controllerArgs = append(controllerArgs, "-auth-enabled=false")
 	}
+	if i.Debug {
+		controllerArgs = append(
+			util.StringToInterfaceList(i.getDelveArgs("wireguard-controller")),
+			controllerArgs...,
+		)
+	}
 
 	var WireguardControllerDeploy = &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -446,10 +487,8 @@ func (i *Installer) InstallWireguardModule() error {
 					"spec": map[string]interface{}{
 						"containers": []interface{}{
 							map[string]interface{}{
-								"args": controllerArgs,
-								"command": []interface{}{
-									"/wireguard-controller",
-								},
+								"args":    controllerArgs,
+								"command": i.getCommand("wireguard-controller"),
 								"envFrom": []interface{}{
 									map[string]interface{}{
 										"secretRef": map[string]interface{}{
@@ -467,8 +506,9 @@ func (i *Installer) InstallWireguardModule() error {
 									i.ControlPlaneImageRepo,
 									i.ControlPlaneImageTag,
 								),
-								"imagePullPolicy": "IfNotPresent",
+								"imagePullPolicy": i.getImagePullPolicy(),
 								"name":            "wireguard-wireguard-controller",
+								"ports":           controllerPorts,
 								"readinessProbe": map[string]interface{}{
 									"failureThreshold": 1,
 									"httpGet": map[string]interface{}{
@@ -769,4 +809,68 @@ func getVolumeMounts() []interface{} {
 			"name":      certSecretName,
 		},
 	}
+}
+
+// cpi.getDelveArgs returns the args that are passed to delve.
+// func (cpi *ControlPlaneInstaller) getDelveArgs(name string) []string {
+func (i *Installer) getDelveArgs(name string) []string {
+	args := []string{
+		"--continue",
+		"--accept-multiclient",
+		"--listen=:40000",
+		"--headless=true",
+		"--api-version=2",
+	}
+
+	if i.Debug {
+		args = append(args, "--log")
+	}
+
+	args = append(args, "exec")
+	args = append(args, fmt.Sprintf("/%s", name))
+	return args
+}
+
+// func (cpi *ControlPlaneInstaller) getReadinessProbe() map[string]interface{} {
+func (i *Installer) getReadinessProbe() map[string]interface{} {
+	var readinessProbe map[string]interface{}
+	if !i.Debug {
+		readinessProbe = map[string]interface{}{
+			"failureThreshold": 1,
+			"httpGet": map[string]interface{}{
+				"path":   "/readyz",
+				"port":   8081,
+				"scheme": "HTTP",
+			},
+			"initialDelaySeconds": 1,
+			"periodSeconds":       2,
+			"successThreshold":    1,
+			"timeoutSeconds":      1,
+		}
+	}
+	return readinessProbe
+}
+
+// getCommand returns the args that are passed to the container.
+// func (cpi *ControlPlaneInstaller) getCommand(name string) []interface{} {
+func (i *Installer) getCommand(name string) []interface{} {
+
+	switch {
+	case i.Debug:
+		return []interface{}{
+			"/usr/local/bin/dlv",
+		}
+	default:
+		return []interface{}{
+			fmt.Sprintf("/%s", name),
+		}
+	}
+}
+
+// getImagePullPolicy returns the image pull policy based on debug mode.
+func (i *Installer) getImagePullPolicy() string {
+	if i.Debug {
+		return "Always"
+	}
+	return "IfNotPresent"
 }
