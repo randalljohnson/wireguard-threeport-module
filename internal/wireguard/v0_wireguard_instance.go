@@ -362,26 +362,40 @@ func configureSecurityListRules(
 		log:       log,
 	}
 
-	// add loadbalancer rule
-	lbRuleConfig := SecurityRuleConfig{
+	// add loadbalancer ingress rule
+	lbIngressRuleConfig := SecurityRuleConfig{
 		Protocol:    "17", // udp
 		Source:      "0.0.0.0/0",
 		Description: fmt.Sprintf("%s: Allow Wireguard UDP traffic", getModulePrefix(wireguardInstance)),
 		Port:        51820,
+		Direction:   "ingress",
 	}
-	if err := manager.addSecurityRule(setup.lbSecurityList, lbRuleConfig); err != nil {
-		return fmt.Errorf("failed to add loadbalancer security rule: %w", err)
+	if err := manager.addSecurityRule(setup.lbSecurityList, lbIngressRuleConfig); err != nil {
+		return fmt.Errorf("failed to add loadbalancer ingress security rule: %w", err)
 	}
 
-	// add worker rule
-	workerRuleConfig := SecurityRuleConfig{
+	// add loadbalancer egress rule to worker subnet
+	lbEgressRuleConfig := SecurityRuleConfig{
+		Protocol:    "17", // udp
+		Destination: *setup.workerSubnet.CidrBlock,
+		Description: fmt.Sprintf("%s: Allow Wireguard UDP traffic to worker subnet", getModulePrefix(wireguardInstance)),
+		Port:        setup.wireguardPort,
+		Direction:   "egress",
+	}
+	if err := manager.addSecurityRule(setup.lbSecurityList, lbEgressRuleConfig); err != nil {
+		return fmt.Errorf("failed to add loadbalancer egress security rule: %w", err)
+	}
+
+	// add worker ingress rule
+	workerIngressRuleConfig := SecurityRuleConfig{
 		Protocol:    "17", // udp
 		Source:      *setup.workerSubnet.CidrBlock,
 		Description: fmt.Sprintf("%s: Allow Wireguard UDP traffic", getModulePrefix(wireguardInstance)),
 		Port:        setup.wireguardPort,
+		Direction:   "ingress",
 	}
-	if err := manager.addSecurityRule(setup.workerSecurityList, workerRuleConfig); err != nil {
-		return fmt.Errorf("failed to add worker security rule: %w", err)
+	if err := manager.addSecurityRule(setup.workerSecurityList, workerIngressRuleConfig); err != nil {
+		return fmt.Errorf("failed to add worker ingress security rule: %w", err)
 	}
 
 	log.Info("successfully configured security list rules for wireguard",
@@ -533,71 +547,71 @@ type SecurityListManager struct {
 type SecurityRuleConfig struct {
 	Protocol    string
 	Source      string
+	Destination string // Added for egress rules
 	Description string
 	Port        int32
+	Direction   string // "ingress" or "egress"
 }
 
 // addSecurityRule adds a new security rule to a security list if it doesn't exist
 func (m *SecurityListManager) addSecurityRule(securityList *core.SecurityList, config SecurityRuleConfig) error {
-	if m.findExistingRule(securityList.IngressSecurityRules, config.Description, config.Port) {
-		return nil
-	}
+	var updateDetails core.UpdateSecurityListDetails
 
-	newRule := core.IngressSecurityRule{
-		Protocol:    common.String(config.Protocol),
-		Source:      common.String(config.Source),
-		Description: common.String(config.Description),
-		UdpOptions: &core.UdpOptions{
-			DestinationPortRange: &core.PortRange{
-				Min: common.Int(int(config.Port)),
-				Max: common.Int(int(config.Port)),
-			},
-		},
-	}
-
-	rules := append(securityList.IngressSecurityRules, newRule)
-	_, err := m.vcnClient.UpdateSecurityList(context.Background(), core.UpdateSecurityListRequest{
-		SecurityListId: securityList.Id,
-		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
-			IngressSecurityRules: rules,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to update security list: %w", err)
-	}
-
-	return nil
-}
-
-// removeSecurityRules removes security rules matching the description prefix for a given
-// security list
-func (m *SecurityListManager) removeSecurityRules(securityList *core.SecurityList, descriptionPrefix string) error {
-	var updatedRules []core.IngressSecurityRule
-	for _, rule := range securityList.IngressSecurityRules {
-		// skip rules that match both our description prefix and port
-		if rule.UdpOptions != nil &&
-			rule.UdpOptions.DestinationPortRange != nil &&
-			rule.Description != nil &&
-			strings.HasPrefix(*rule.Description, descriptionPrefix) {
-			continue
+	switch config.Direction {
+	case "ingress":
+		if m.findExistingRule(securityList.IngressSecurityRules, config.Description, config.Port) {
+			return nil
 		}
 
-		// keep all other rules
-		updatedRules = append(updatedRules, rule)
-	}
+		newRule := core.IngressSecurityRule{
+			Protocol:    common.String(config.Protocol),
+			Source:      common.String(config.Source),
+			Description: common.String(config.Description),
+			UdpOptions: &core.UdpOptions{
+				DestinationPortRange: &core.PortRange{
+					Min: common.Int(int(config.Port)),
+					Max: common.Int(int(config.Port)),
+				},
+			},
+		}
 
-	if len(updatedRules) == len(securityList.IngressSecurityRules) {
-		return nil // no rules were removed
+		rules := append(securityList.IngressSecurityRules, newRule)
+		updateDetails = core.UpdateSecurityListDetails{
+			IngressSecurityRules: rules,
+		}
+
+	case "egress":
+		if m.findExistingEgressRule(securityList.EgressSecurityRules, config.Description, config.Port) {
+			return nil
+		}
+
+		newRule := core.EgressSecurityRule{
+			Protocol:    common.String(config.Protocol),
+			Destination: common.String(config.Destination),
+			Description: common.String(config.Description),
+			UdpOptions: &core.UdpOptions{
+				DestinationPortRange: &core.PortRange{
+					Min: common.Int(int(config.Port)),
+					Max: common.Int(int(config.Port)),
+				},
+			},
+		}
+
+		rules := append(securityList.EgressSecurityRules, newRule)
+		updateDetails = core.UpdateSecurityListDetails{
+			EgressSecurityRules: rules,
+		}
+
+	default:
+		return fmt.Errorf("invalid security rule direction: %s", config.Direction)
 	}
 
 	_, err := m.vcnClient.UpdateSecurityList(context.Background(), core.UpdateSecurityListRequest{
-		SecurityListId: securityList.Id,
-		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
-			IngressSecurityRules: updatedRules,
-		},
+		SecurityListId:            securityList.Id,
+		UpdateSecurityListDetails: updateDetails,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to update security list: %w", err)
+		return fmt.Errorf("failed to update security list %s rules: %w", config.Direction, err)
 	}
 
 	return nil
@@ -615,4 +629,64 @@ func (m *SecurityListManager) findExistingRule(rules []core.IngressSecurityRule,
 		}
 	}
 	return false
+}
+
+// findExistingEgressRule checks if an egress rule already exists in the security list
+func (m *SecurityListManager) findExistingEgressRule(rules []core.EgressSecurityRule, description string, port int32) bool {
+	for _, rule := range rules {
+		if rule.UdpOptions != nil && rule.UdpOptions.DestinationPortRange != nil {
+			if *rule.UdpOptions.DestinationPortRange.Min == int(port) &&
+				*rule.UdpOptions.DestinationPortRange.Max == int(port) &&
+				*rule.Description == description {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// removeSecurityRules removes security rules matching the description prefix for a given
+// security list
+func (m *SecurityListManager) removeSecurityRules(securityList *core.SecurityList, descriptionPrefix string) error {
+	// Handle ingress rules
+	var updatedIngressRules []core.IngressSecurityRule
+	for _, rule := range securityList.IngressSecurityRules {
+		if rule.UdpOptions != nil &&
+			rule.UdpOptions.DestinationPortRange != nil &&
+			rule.Description != nil &&
+			strings.HasPrefix(*rule.Description, descriptionPrefix) {
+			continue
+		}
+		updatedIngressRules = append(updatedIngressRules, rule)
+	}
+
+	// Handle egress rules
+	var updatedEgressRules []core.EgressSecurityRule
+	for _, rule := range securityList.EgressSecurityRules {
+		if rule.UdpOptions != nil &&
+			rule.UdpOptions.DestinationPortRange != nil &&
+			rule.Description != nil &&
+			strings.HasPrefix(*rule.Description, descriptionPrefix) {
+			continue
+		}
+		updatedEgressRules = append(updatedEgressRules, rule)
+	}
+
+	if len(updatedIngressRules) == len(securityList.IngressSecurityRules) &&
+		len(updatedEgressRules) == len(securityList.EgressSecurityRules) {
+		return nil // no rules were removed
+	}
+
+	_, err := m.vcnClient.UpdateSecurityList(context.Background(), core.UpdateSecurityListRequest{
+		SecurityListId: securityList.Id,
+		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+			IngressSecurityRules: updatedIngressRules,
+			EgressSecurityRules:  updatedEgressRules,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update security list: %w", err)
+	}
+
+	return nil
 }
