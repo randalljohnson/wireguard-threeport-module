@@ -7,31 +7,7 @@ import (
 	"fmt"
 )
 
-// calculateConfigMapHash calculates a hash of all ConfigMap objects in the extraDeploy list
-func calculateConfigMapHash(extraDeploy []interface{}) string {
-	var configMaps []map[string]interface{}
-
-	// Extract ConfigMap objects from extraDeploy
-	for _, obj := range extraDeploy {
-		if objMap, ok := obj.(map[string]interface{}); ok {
-			if kind, ok := objMap["kind"].(string); ok && kind == "ConfigMap" {
-				configMaps = append(configMaps, objMap)
-			}
-		}
-	}
-
-	// Sort configMaps by name to ensure consistent hashing
-	// Convert to JSON for hashing
-	jsonBytes, err := json.Marshal(configMaps)
-	if err != nil {
-		return ""
-	}
-
-	// Calculate SHA-256 hash
-	hash := sha256.Sum256(jsonBytes)
-	return hex.EncodeToString(hash[:])
-}
-
+// getHelmValues returns the helm values for the wireguard deployment
 func getHelmValues() map[string]interface{} {
 	subnet := "10.0.0.0/24"
 	serverIP := "10.0.0.1/24"
@@ -181,4 +157,29 @@ wg set wg0 private-key /data/wireguard-private-key/privatekey
 			},
 		},
 	}
+}
+
+// calculateConfigMapHash calculates a hash of all ConfigMap objects in the extraDeploy list
+func calculateConfigMapHash(extraDeploy []interface{}) string {
+	var configMaps []map[string]interface{}
+
+	// Extract ConfigMap objects from extraDeploy
+	for _, obj := range extraDeploy {
+		if objMap, ok := obj.(map[string]interface{}); ok {
+			if kind, ok := objMap["kind"].(string); ok && kind == "ConfigMap" {
+				configMaps = append(configMaps, objMap)
+			}
+		}
+	}
+
+	// Sort configMaps by name to ensure consistent hashing
+	// Convert to JSON for hashing
+	jsonBytes, err := json.Marshal(configMaps)
+	if err != nil {
+		return ""
+	}
+
+	// Calculate SHA-256 hash
+	hash := sha256.Sum256(jsonBytes)
+	return hex.EncodeToString(hash[:])
 }
