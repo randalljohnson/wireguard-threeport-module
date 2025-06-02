@@ -1,14 +1,28 @@
 package wireguard
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+
+	"golang.org/x/crypto/curve25519"
 )
 
 // getHelmValues returns the helm values for the wireguard deployment
-func getHelmValues() map[string]interface{} {
+func getHelmValues() (map[string]interface{}, error) {
+	serverPrivateKey, serverPublicKey, err := generateWireguardKeys()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate wireguard server keys: %v", err)
+	}
+
+	clientPrivateKey, clientPublicKey, err := generateWireguardKeys()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate wireguard client keys: %v", err)
+	}
+
 	subnet := "10.0.0.0/24"
 	serverIP := "10.0.0.1/24"
 	clientIP := "10.0.0.2/32"
@@ -22,9 +36,9 @@ DNS = 8.8.8.8
 
 # Example peer configuration (uncomment and modify as needed)
 [Peer]
-PublicKey = c8tAMaT8B0rfRVq7J60Umi1LFbBFEPiYjtUkkD4TgRU=
+PublicKey = %s
 AllowedIPs = %s`
-	formattedWg0Conf := fmt.Sprintf(wg0conf, serverIP, wireguardPort, clientIP)
+	formattedWg0Conf := fmt.Sprintf(wg0conf, serverIP, wireguardPort, clientPublicKey, clientIP)
 
 	iptablesScript := `#!/bin/bash
 IPT="/sbin/iptables"
@@ -66,13 +80,35 @@ $IPT -I INPUT 1 -i $IN_FACE -p udp --dport $WG_PORT -j ACCEPT`
 				"add-nat-routing.sh": formattedIpTablesScript,
 			},
 		},
+		map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Secret",
+			"metadata": map[string]interface{}{
+				"name": "wireguard-server-keys",
+			},
+			"stringData": map[string]interface{}{
+				"privateKey": serverPrivateKey,
+				"publicKey":  serverPublicKey,
+			},
+		},
+		map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Secret",
+			"metadata": map[string]interface{}{
+				"name": "wireguard-client-keys",
+			},
+			"stringData": map[string]interface{}{
+				"privateKey": clientPrivateKey,
+				"publicKey":  clientPublicKey,
+			},
+		},
 	}
 
 	// calculate hash of ConfigMaps, which will trigger a pod restart
 	// on changes made to wireguard config
 	configMapHash := calculateConfigMapHash(extraDeploy)
 
-	return map[string]interface{}{
+	values := map[string]interface{}{
 		"service": map[string]interface{}{
 			"wireguard": map[string]interface{}{
 				"annotations": map[string]interface{}{
@@ -92,9 +128,9 @@ $IPT -I INPUT 1 -i $IN_FACE -p udp --dport $WG_PORT -j ACCEPT`
 				},
 			},
 			map[string]interface{}{
-				"name": "wireguard-private-key",
+				"name": "wireguard-server-keys",
 				"secret": map[string]interface{}{
-					"secretName":  "wireguard-private-key",
+					"secretName":  "wireguard-server-keys",
 					"defaultMode": 0400,
 				},
 			},
@@ -113,9 +149,9 @@ $IPT -I INPUT 1 -i $IN_FACE -p udp --dport $WG_PORT -j ACCEPT`
 				"name":      "wg-config",
 			},
 			map[string]interface{}{
-				"mountPath": "/data/wireguard-private-key",
+				"mountPath": "/data/wireguard-server-keys",
 				"readOnly":  true,
-				"name":      "wireguard-private-key",
+				"name":      "wireguard-server-keys",
 			},
 		},
 		"initContainers": []interface{}{
@@ -125,8 +161,8 @@ $IPT -I INPUT 1 -i $IN_FACE -p udp --dport $WG_PORT -j ACCEPT`
 					"-c",
 					`sysctl -w net.ipv4.conf.all.forwarding=1 &&
 sh -c /data/iptables/add-nat-routing.sh &&
-wg-quick up /data/wireguard/wg0.conf
-wg set wg0 private-key /data/wireguard-private-key/privatekey
+wg-quick up /data/wireguard/wg0.conf &&
+wg set wg0 private-key /data/wireguard-server-keys/privateKey
 `,
 				},
 				"image":           "ghcr.io/h44z/wg-portal:v2",
@@ -146,8 +182,8 @@ wg set wg0 private-key /data/wireguard-private-key/privatekey
 						"mountPath": "/data/wireguard",
 					},
 					map[string]interface{}{
-						"name":      "wireguard-private-key",
-						"mountPath": "/data/wireguard-private-key",
+						"name":      "wireguard-server-keys",
+						"mountPath": "/data/wireguard-server-keys",
 					},
 					map[string]interface{}{
 						"name":      "iptables-script",
@@ -157,6 +193,8 @@ wg set wg0 private-key /data/wireguard-private-key/privatekey
 			},
 		},
 	}
+
+	return values, nil
 }
 
 // calculateConfigMapHash calculates a hash of all ConfigMap objects in the extraDeploy list
@@ -181,4 +219,29 @@ func calculateConfigMapHash(extraDeploy []interface{}) string {
 	// calculate SHA-256 hash
 	hash := sha256.Sum256(jsonBytes)
 	return hex.EncodeToString(hash[:])
+}
+
+// generateWireguardKeys returns a Wireguard key pair
+func generateWireguardKeys() (string, string, error) {
+	// generate a 32-byte private key using crypto/rand
+	privateKey := make([]byte, 32)
+	_, err := rand.Read(privateKey)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate private key: %v", err)
+	}
+
+	// clamp private key for curve25519 (WireGuard requirement)
+	privateKey[0] &= 248  // 1. clear lowest 3 bits of first byte
+	privateKey[31] &= 127 // 2. clear highest bit of last byte
+	privateKey[31] |= 64  // 3. set second highest bit of last byte
+
+	// derive public key from the private key using curve25519
+	var publicKey [32]byte
+	curve25519.ScalarBaseMult(&publicKey, (*[32]byte)(privateKey))
+
+	// encode keys in base64
+	privateKeyBase64 := base64.StdEncoding.EncodeToString(privateKey)
+	publicKeyBase64 := base64.StdEncoding.EncodeToString(publicKey[:])
+
+	return privateKeyBase64, publicKeyBase64, nil
 }

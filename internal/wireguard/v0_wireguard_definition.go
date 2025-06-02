@@ -24,7 +24,11 @@ func v0WireguardDefinitionCreated(
 	log *logr.Logger,
 ) (int64, error) {
 	// marshal Helm values to YAML
-	valuesYAML, err := yaml.Marshal(getHelmValues())
+	values, err := getHelmValues()
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	}
+	valuesYAML, err := yaml.Marshal(values)
 	if err != nil {
 		return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
 	}
@@ -51,6 +55,7 @@ func v0WireguardDefinitionCreated(
 	return 0, nil
 }
 
+// TODO: implement with support for updating configuration without changing wireguard keys
 // v0WireguardDefinitionUpdated performs reconciliation when a v0 WireguardDefinition
 // has been updated.
 func v0WireguardDefinitionUpdated(
@@ -58,32 +63,36 @@ func v0WireguardDefinitionUpdated(
 	wireguardDefinition *v0.WireguardDefinition,
 	log *logr.Logger,
 ) (int64, error) {
-	// marshal Helm values to YAML
-	valuesYAML, err := yaml.Marshal(getHelmValues())
-	if err != nil {
-		return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
-	}
-	valuesStr := string(valuesYAML)
+	// // marshal Helm values to YAML
+	// values, err := getHelmValues()
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	// }
+	// valuesYAML, err := yaml.Marshal(values)
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	// }
+	// valuesStr := string(valuesYAML)
 
-	// get associated HelmWorkloadDefinition by name
-	helmWorkloadDef, err := tpclient_v0.GetHelmWorkloadDefinitionByName(r.APIClient, r.APIServer, *wireguardDefinition.Name)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get HelmWorkloadDefinition: %w", err)
-	}
+	// // get associated HelmWorkloadDefinition by name
+	// helmWorkloadDef, err := tpclient_v0.GetHelmWorkloadDefinitionByName(r.APIClient, r.APIServer, *wireguardDefinition.Name)
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to get HelmWorkloadDefinition: %w", err)
+	// }
 
-	// update HelmWorkloadDefinition
-	helmWorkloadDef.Repo = util.Ptr("oci://ghcr.io/h44z/charts/wg-portal")
-	helmWorkloadDef.Chart = util.Ptr("")
-	helmWorkloadDef.ChartVersion = util.Ptr("")
-	helmWorkloadDef.ValuesDocument = &valuesStr
+	// // update HelmWorkloadDefinition
+	// helmWorkloadDef.Repo = util.Ptr("oci://ghcr.io/h44z/charts/wg-portal")
+	// helmWorkloadDef.Chart = util.Ptr("")
+	// helmWorkloadDef.ChartVersion = util.Ptr("")
+	// helmWorkloadDef.ValuesDocument = &valuesStr
 
-	// update HelmWorkloadDefinition
-	updatedDef, err := tpclient_v0.UpdateHelmWorkloadDefinition(r.APIClient, r.APIServer, helmWorkloadDef)
-	if err != nil {
-		return 0, fmt.Errorf("failed to update HelmWorkloadDefinition: %w", err)
-	}
+	// // update HelmWorkloadDefinition
+	// updatedDef, err := tpclient_v0.UpdateHelmWorkloadDefinition(r.APIClient, r.APIServer, helmWorkloadDef)
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to update HelmWorkloadDefinition: %w", err)
+	// }
 
-	log.Info("updated HelmWorkloadDefinition", "name", updatedDef.Name)
+	// log.Info("updated HelmWorkloadDefinition", "name", updatedDef.Name)
 	return 0, nil
 }
 

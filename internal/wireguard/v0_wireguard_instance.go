@@ -4,8 +4,6 @@ package wireguard
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -23,8 +21,6 @@ import (
 	tpclient "github.com/threeport/threeport/pkg/client/v0"
 	controller "github.com/threeport/threeport/pkg/controller/v0"
 	kube "github.com/threeport/threeport/pkg/kube/v0"
-	"golang.org/x/crypto/curve25519"
-	"gopkg.in/yaml.v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -50,6 +46,7 @@ func v0WireguardInstanceCreated(
 	return 0, nil
 }
 
+// TODO: implement with support for updating configuration without changing wireguard keys
 // v0WireguardInstanceUpdated performs reconciliation when a v0 WireguardInstance
 // has been updated.
 func v0WireguardInstanceUpdated(
@@ -57,30 +54,34 @@ func v0WireguardInstanceUpdated(
 	wireguardInstance *v0.WireguardInstance,
 	log *logr.Logger,
 ) (int64, error) {
-	// get HelmWorkloadInstance
-	helmWorkloadInst, err := helmclient_v0.GetHelmWorkloadInstanceByName(r.APIClient, r.APIServer, *wireguardInstance.Name)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get HelmWorkloadInstance: %w", err)
-	}
+	// // get HelmWorkloadInstance
+	// helmWorkloadInst, err := helmclient_v0.GetHelmWorkloadInstanceByName(r.APIClient, r.APIServer, *wireguardInstance.Name)
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to get HelmWorkloadInstance: %w", err)
+	// }
 
-	// marshal helm values
-	valuesYAML, err := yaml.Marshal(getHelmValues())
-	if err != nil {
-		return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
-	}
-	valuesStr := string(valuesYAML)
+	// // marshal helm values
+	// values, err := getHelmValues()
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	// }
+	// valuesYAML, err := yaml.Marshal(values)
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	// }
+	// valuesStr := string(valuesYAML)
 
-	// update values
-	helmWorkloadInst.ValuesDocument = &valuesStr
+	// // update values
+	// helmWorkloadInst.ValuesDocument = &valuesStr
 
-	// update HelmWorkloadInstance
-	updatedInst, err := helmclient_v0.UpdateHelmWorkloadInstance(r.APIClient, r.APIServer, helmWorkloadInst)
-	if err != nil {
-		return 0, fmt.Errorf("failed to update HelmWorkloadInstance: %w", err)
-	}
+	// // update HelmWorkloadInstance
+	// updatedInst, err := helmclient_v0.UpdateHelmWorkloadInstance(r.APIClient, r.APIServer, helmWorkloadInst)
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to update HelmWorkloadInstance: %w", err)
+	// }
 
-	// log update
-	log.Info("updated HelmWorkloadInstance", "name", updatedInst.Name)
+	// // log update
+	// log.Info("updated HelmWorkloadInstance", "name", updatedInst.Name)
 
 	return 0, nil
 }
@@ -704,29 +705,4 @@ func (m *SecurityListManager) removeSecurityRules(securityList *core.SecurityLis
 	}
 
 	return nil
-}
-
-// generateWireguardKeys returns a Wireguard key pair
-func generateWireguardKeys() (string, string, error) {
-	// generate a 32-byte private key using crypto/rand
-	privateKey := make([]byte, 32)
-	_, err := rand.Read(privateKey)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to generate private key: %v", err)
-	}
-
-	// clamp private key for curve25519 (WireGuard requirement)
-	privateKey[0] &= 248  // 1. clear lowest 3 bits of first byte
-	privateKey[31] &= 127 // 2. clear highest bit of last byte
-	privateKey[31] |= 64  // 3. set second highest bit of last byte
-
-	// derive public key from the private key using curve25519
-	var publicKey [32]byte
-	curve25519.ScalarBaseMult(&publicKey, (*[32]byte)(privateKey))
-
-	// encode keys in base64
-	privateKeyBase64 := base64.StdEncoding.EncodeToString(privateKey)
-	publicKeyBase64 := base64.StdEncoding.EncodeToString(publicKey[:])
-
-	return privateKeyBase64, publicKeyBase64, nil
 }
