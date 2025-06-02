@@ -31,7 +31,7 @@ IPT="/sbin/iptables"
 
 IN_FACE="eth0"                   # NIC connected to the internet
 WG_FACE="wg0"                    # WG NIC
-SUB_NET="%s"                     # WG IPv4 sub/net aka CIDR
+SUB_NET="%s"                     # WG IPv4 subnet
 WG_PORT="%s"                     # WG udp port
 
 # IPv4 rules #
