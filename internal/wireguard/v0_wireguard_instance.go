@@ -4,6 +4,8 @@ package wireguard
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	tpclient "github.com/threeport/threeport/pkg/client/v0"
 	controller "github.com/threeport/threeport/pkg/controller/v0"
 	kube "github.com/threeport/threeport/pkg/kube/v0"
+	"golang.org/x/crypto/curve25519"
 	"gopkg.in/yaml.v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -701,4 +704,29 @@ func (m *SecurityListManager) removeSecurityRules(securityList *core.SecurityLis
 	}
 
 	return nil
+}
+
+// generateWireguardKeys returns a Wireguard key pair
+func generateWireguardKeys() (string, string, error) {
+	// generate a 32-byte private key using crypto/rand
+	privateKey := make([]byte, 32)
+	_, err := rand.Read(privateKey)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate private key: %v", err)
+	}
+
+	// clamp private key for curve25519 (WireGuard requirement)
+	privateKey[0] &= 248  // 1. clear lowest 3 bits of first byte
+	privateKey[31] &= 127 // 2. clear highest bit of last byte
+	privateKey[31] |= 64  // 3. set second highest bit of last byte
+
+	// derive public key from the private key using curve25519
+	var publicKey [32]byte
+	curve25519.ScalarBaseMult(&publicKey, (*[32]byte)(privateKey))
+
+	// encode keys in base64
+	privateKeyBase64 := base64.StdEncoding.EncodeToString(privateKey)
+	publicKeyBase64 := base64.StdEncoding.EncodeToString(publicKey[:])
+
+	return privateKeyBase64, publicKeyBase64, nil
 }

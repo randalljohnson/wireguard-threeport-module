@@ -22,7 +22,7 @@ DNS = 8.8.8.8
 
 # Example peer configuration (uncomment and modify as needed)
 [Peer]
-PublicKey = fTo/2gZLB3m7Y7CfIEK5TeZ2R8zERxs5VXB/MtcEyXI=
+PublicKey = c8tAMaT8B0rfRVq7J60Umi1LFbBFEPiYjtUkkD4TgRU=
 AllowedIPs = %s`
 	formattedWg0Conf := fmt.Sprintf(wg0conf, serverIP, wireguardPort, clientIP)
 
