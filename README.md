@@ -38,7 +38,7 @@ Wireguard:
 
 To retrieve the Wireguard client configuration:
 ```bash
-./bin/wireguard get wireguard-conf --name=wg-test
+./bin/wireguard get wireguard-config --name=wg-test
 ```
 
 This will output a Wireguard client configuration that can be used to connect to the VPN.

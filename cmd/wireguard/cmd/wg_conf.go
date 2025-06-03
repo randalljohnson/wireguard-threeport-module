@@ -22,12 +22,12 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-var getWireguardConfVersion string
+var getWireguardConfigVersion string
 var wireguardInstanceName string
 
-// GetWireguardConfCmd represents the wireguard-definition command
-var GetWireguardConfCmd = &cobra.Command{
-	Example: "  tptctl wireguard get wireguard-conf",
+// GetWireguardConfigCmd represents the wireguard-definition command
+var GetWireguardConfigCmd = &cobra.Command{
+	Example: "  tptctl wireguard get wireguard-config",
 	Long:    "Get wireguard configuration from the system.",
 	PreRun:  CommandPreRunFunc,
 	Run: func(cmd *cobra.Command, args []string) {
@@ -48,15 +48,15 @@ var GetWireguardConfCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		switch getWireguardConfVersion {
+		switch getWireguardConfigVersion {
 		case "v0":
-			wireguardConf, err := getWireguardConfVersionV0(apiClient, apiEndpoint, encryptionKey)
+			wireguardConfig, err := getWireguardConfigVersionV0(apiClient, apiEndpoint, encryptionKey)
 			if err != nil {
 				cli.Error("failed to retrieve wireguard configuration", err)
 				os.Exit(1)
 			}
 
-			fmt.Println(wireguardConf)
+			fmt.Println(wireguardConfig)
 		default:
 			cli.Error("", errors.New("unrecognized object version"))
 			os.Exit(1)
@@ -64,25 +64,25 @@ var GetWireguardConfCmd = &cobra.Command{
 	},
 	Short:        "Get wireguard configuration from the system",
 	SilenceUsage: true,
-	Use:          "wireguard-conf",
+	Use:          "wireguard-config",
 }
 
 func init() {
-	GetCmd.AddCommand(GetWireguardConfCmd)
+	GetCmd.AddCommand(GetWireguardConfigCmd)
 
-	GetWireguardConfCmd.Flags().StringVarP(
-		&getWireguardConfVersion,
+	GetWireguardConfigCmd.Flags().StringVarP(
+		&getWireguardConfigVersion,
 		"version", "v", "v0", "Version of wireguard configuration object to retrieve. One of: [v0]",
 	)
-	GetWireguardConfCmd.Flags().StringVarP(
+	GetWireguardConfigCmd.Flags().StringVarP(
 		&wireguardInstanceName,
 		"name", "n", "", "Name of wireguard instance to retrieve configuration for.",
 	)
-	GetWireguardConfCmd.MarkFlagRequired("name")
+	GetWireguardConfigCmd.MarkFlagRequired("name")
 }
 
-// getWireguardConfVersionV0 retrieves the wireguard configuration from the system
-func getWireguardConfVersionV0(
+// getWireguardConfigVersionV0 retrieves the wireguard configuration from the system
+func getWireguardConfigVersionV0(
 	apiClient *http.Client,
 	apiEndpoint string,
 	encryptionKey string,
