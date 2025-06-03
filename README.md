@@ -26,7 +26,7 @@ mage build:plugin
 1. Create a configuration file (e.g., `wireguard-config.yaml`):
 ```yaml
 Wireguard:
-  Name: wg-test
+  Name: wireguard
 ```
 
 2. Create the Wireguard instance:
@@ -38,7 +38,7 @@ Wireguard:
 
 To retrieve the Wireguard client configuration:
 ```bash
-./bin/wireguard get wireguard-config --name=wg-test
+./bin/wireguard get wireguard-config --name=wireguard
 ```
 
 This will output a Wireguard client configuration that can be used to connect to the VPN.
