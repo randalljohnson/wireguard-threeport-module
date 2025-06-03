@@ -374,8 +374,11 @@ func setupOciResources(
 		"spec",
 		"ports",
 	)
-	if err != nil || !found {
+	switch {
+	case err != nil:
 		return nil, fmt.Errorf("failed to get ports from service: %w", err)
+	case !found:
+		return nil, fmt.Errorf("failed to find ports in service")
 	}
 
 	// get wireguard port

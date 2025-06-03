@@ -134,8 +134,11 @@ func getWireguardConfigVersionV0(
 
 		// get ip address
 		ip, found, err := unstructured.NestedString(ingressMap, "ip")
-		if err != nil || !found {
-			continue
+		switch {
+		case err != nil:
+			return "", fmt.Errorf("failed to get ip address from ingress: %w", err)
+		case !found:
+			return "", fmt.Errorf("failed to find ip address in ingress")
 		}
 
 		// parse and validate ip address
@@ -262,8 +265,11 @@ func getWireguardSecretData(
 	key string,
 ) (string, error) {
 	data, found, err := unstructured.NestedMap(secret.Object, "data")
-	if err != nil || !found {
+	switch {
+	case err != nil:
 		return "", fmt.Errorf("failed to get secret data: %w", err)
+	case !found:
+		return "", fmt.Errorf("failed to find secret data")
 	}
 
 	valueBase64, ok := data[key].(string)
