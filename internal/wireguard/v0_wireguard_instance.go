@@ -100,7 +100,7 @@ func v0WireguardInstanceDeleted(
 	}
 
 	// delete HelmWorkloadInstance
-	if err := cleanupHelmWorkloadInstance(r, wireguardInstance, log); err != nil {
+	if err := deleteHelmWorkloadInstance(r, wireguardInstance, log); err != nil {
 		return 0, fmt.Errorf("failed to cleanup HelmWorkloadInstance: %w", err)
 	}
 
@@ -167,8 +167,8 @@ func createHelmWorkloadInstance(
 	return nil
 }
 
-// cleanupHelmWorkloadInstance deletes a HelmWorkloadInstance associated with a Wireguard instance
-func cleanupHelmWorkloadInstance(
+// deleteHelmWorkloadInstance deletes a HelmWorkloadInstance associated with a Wireguard instance
+func deleteHelmWorkloadInstance(
 	r *controller.Reconciler,
 	wireguardInstance *v0.WireguardInstance,
 	log *logr.Logger,
@@ -297,9 +297,6 @@ func setupOciResources(
 		return nil, fmt.Errorf("failed to get oci oke runtime instance: %w", err)
 	}
 
-	// get cluster id
-	clusterOCID := *ociOkeRuntimeInstance.ClusterOCID
-
 	// create oci clients
 	vcnClient, err := core.NewVirtualNetworkClientWithConfigurationProvider(ociClient)
 	if err != nil {
@@ -312,7 +309,7 @@ func setupOciResources(
 
 	// get cluster details
 	cluster, err := containerClient.GetCluster(context.Background(), containerengine.GetClusterRequest{
-		ClusterId: &clusterOCID,
+		ClusterId: ociOkeRuntimeInstance.ClusterOCID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get cluster details: %w", err)
@@ -331,7 +328,7 @@ func setupOciResources(
 	// get node pools
 	nodePools, err := containerClient.ListNodePools(context.Background(), containerengine.ListNodePoolsRequest{
 		CompartmentId: ociAccount.TenancyOCID,
-		ClusterId:     &clusterOCID,
+		ClusterId:     ociOkeRuntimeInstance.ClusterOCID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list node pools: %w", err)
@@ -467,7 +464,7 @@ func configureSecurityListRules(
 				getModulePrefix(wireguardInstance),
 			),
 			Port:      51820,
-			Direction: "ingress",
+			Direction: SecurityRuleDirectionIngress,
 		},
 	); err != nil {
 		return fmt.Errorf("failed to add loadbalancer ingress security rule: %w", err)
