@@ -4,8 +4,7 @@ A Threeport module for managing Wireguard VPN configurations in Kubernetes clust
 
 ## Prerequisites
 
-- A running Threeport control plane
-- Kubernetes cluster with load balancer support
+- A running Threeport control plane on Oracle Kubernetes Engine
 
 ## Installation
 
