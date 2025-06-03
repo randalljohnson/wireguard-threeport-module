@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	logr "github.com/go-logr/logr"
@@ -224,24 +225,8 @@ func setupOciResources(
 	wireguardInstance *v0.WireguardInstance,
 	log *logr.Logger,
 ) (*OciSetup, error) {
-	// get runtime instance id
-	kubernetesRuntimeInstanceId, err := tpclient.GetObjectIdByAttachedObject(
-		r.APIClient,
-		r.APIServer,
-		tpapi.ObjectTypeKubernetesRuntimeInstance,
-		v0.ObjectTypeWireguardInstance,
-		*wireguardInstance.ID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get kubernetes runtime instance by attachment: %w", err)
-	}
-
-	// get runtime instance
-	kubernetesRuntimeInstance, err := tpclient.GetKubernetesRuntimeInstanceByID(
-		r.APIClient,
-		r.APIServer,
-		*kubernetesRuntimeInstanceId,
-	)
+	// get kubernetes runtime instance
+	kubernetesRuntimeInstance, err := GetWireguardKubernetesRuntimeInstance(r.APIClient, r.APIServer, wireguardInstance)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get kubernetes runtime instance: %w", err)
 	}
@@ -352,41 +337,15 @@ func setupOciResources(
 	}
 
 	// get wireguard service
-	kubeClient, _, err := kube.GetClient(
-		kubernetesRuntimeInstance,
-		false,
+	serviceObj, err := GetWireguardService(
 		r.APIClient,
 		r.APIServer,
 		r.EncryptionKey,
+		wireguardInstance,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get kubernetes client: %w", err)
+		return nil, fmt.Errorf("failed to get wireguard service: %w", err)
 	}
-
-	// define service gvr
-	serviceGVR := schema.GroupVersionResource{
-		Group:    "",
-		Version:  "v1",
-		Resource: "services",
-	}
-
-	// list loadbalancer services
-	serviceList, err := kubeClient.Resource(serviceGVR).Namespace(*wireguardInstance.Name).List(
-		context.Background(),
-		metav1.ListOptions{
-			FieldSelector: "spec.type=LoadBalancer",
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list services: %w", err)
-	} else if len(serviceList.Items) == 0 {
-		return nil, fmt.Errorf("failed to find wireguard service of type loadbalancer")
-	} else if len(serviceList.Items) > 1 {
-		return nil, fmt.Errorf("found multiple wireguard services of type loadbalancer")
-	}
-
-	// get service
-	serviceObj := serviceList.Items[0]
 
 	// get port
 	ports, found, err := unstructured.NestedSlice(serviceObj.Object, "spec", "ports")
@@ -469,53 +428,74 @@ func configureSecurityListRules(
 	}
 
 	// add loadbalancer ingress rule
-	lbIngressRuleConfig := SecurityRuleConfig{
-		Protocol:    SecurityRuleProtocolUDP,
-		Source:      "0.0.0.0/0",
-		Description: fmt.Sprintf("%s: Allow Wireguard UDP traffic", getModulePrefix(wireguardInstance)),
-		Port:        51820,
-		Direction:   "ingress",
-	}
-	if err := manager.addSecurityRule(setup.lbSecurityList, lbIngressRuleConfig); err != nil {
+	if err := manager.addSecurityRule(
+		setup.lbSecurityList,
+		SecurityRuleConfig{
+			Protocol: SecurityRuleProtocolUDP,
+			Source:   "0.0.0.0/0",
+			Description: fmt.Sprintf(
+				"%s: Allow Wireguard UDP traffic",
+				getModulePrefix(wireguardInstance),
+			),
+			Port:      51820,
+			Direction: "ingress",
+		},
+	); err != nil {
 		return fmt.Errorf("failed to add loadbalancer ingress security rule: %w", err)
 	}
 
 	// add loadbalancer egress rule to worker subnet
-	lbEgressRuleConfig := SecurityRuleConfig{
-		Protocol:    SecurityRuleProtocolUDP,
-		Destination: *setup.workerSubnet.CidrBlock,
-		Description: fmt.Sprintf("%s: Allow Wireguard UDP traffic to worker subnet", getModulePrefix(wireguardInstance)),
-		Port:        setup.wireguardPort,
-		Direction:   SecurityRuleDirectionEgress,
-	}
-	if err := manager.addSecurityRule(setup.lbSecurityList, lbEgressRuleConfig); err != nil {
+	if err := manager.addSecurityRule(
+		setup.lbSecurityList,
+		SecurityRuleConfig{
+			Protocol:    SecurityRuleProtocolUDP,
+			Destination: *setup.workerSubnet.CidrBlock,
+			Description: fmt.Sprintf(
+				"%s: Allow Wireguard UDP traffic to worker subnet",
+				getModulePrefix(wireguardInstance),
+			),
+			Port:      setup.wireguardPort,
+			Direction: SecurityRuleDirectionEgress,
+		},
+	); err != nil {
 		return fmt.Errorf("failed to add loadbalancer egress security rule: %w", err)
 	}
 
 	// add worker ingress rule
-	workerIngressRuleConfig := SecurityRuleConfig{
-		Protocol:    SecurityRuleProtocolUDP,
-		Source:      *setup.workerSubnet.CidrBlock,
-		Description: fmt.Sprintf("%s: Allow Wireguard UDP traffic", getModulePrefix(wireguardInstance)),
-		Port:        setup.wireguardPort,
-		Direction:   SecurityRuleDirectionIngress,
-	}
-	if err := manager.addSecurityRule(setup.workerSecurityList, workerIngressRuleConfig); err != nil {
+	if err := manager.addSecurityRule(
+		setup.workerSecurityList,
+		SecurityRuleConfig{
+			Protocol: SecurityRuleProtocolUDP,
+			Source:   *setup.workerSubnet.CidrBlock,
+			Description: fmt.Sprintf(
+				"%s: Allow Wireguard UDP traffic",
+				getModulePrefix(wireguardInstance),
+			),
+			Port:      setup.wireguardPort,
+			Direction: SecurityRuleDirectionIngress,
+		},
+	); err != nil {
 		return fmt.Errorf("failed to add worker ingress security rule: %w", err)
 	}
 
 	// add worker egress rule
-	workerEgressRuleConfig := SecurityRuleConfig{
-		Protocol:    SecurityRuleProtocolAll,
-		Destination: "0.0.0.0/0",
-		Description: fmt.Sprintf("%s: Allow Wireguard traffic to internet", getModulePrefix(wireguardInstance)),
-		Direction:   SecurityRuleDirectionEgress,
-	}
-	if err := manager.addSecurityRule(setup.workerSecurityList, workerEgressRuleConfig); err != nil {
+	if err := manager.addSecurityRule(
+		setup.workerSecurityList,
+		SecurityRuleConfig{
+			Protocol:    SecurityRuleProtocolAll,
+			Destination: "0.0.0.0/0",
+			Description: fmt.Sprintf(
+				"%s: Allow Wireguard traffic to internet",
+				getModulePrefix(wireguardInstance),
+			),
+			Direction: SecurityRuleDirectionEgress,
+		},
+	); err != nil {
 		return fmt.Errorf("failed to add worker egress security rule: %w", err)
 	}
 
-	log.Info("successfully configured security list rules for wireguard",
+	log.Info(
+		"successfully configured security list rules for wireguard",
 		"instance", *wireguardInstance.Name,
 		"port", setup.wireguardPort,
 		"workerSubnet", *setup.workerSubnet.DisplayName,
@@ -705,4 +685,88 @@ func (m *SecurityListManager) removeSecurityRules(securityList *core.SecurityLis
 	}
 
 	return nil
+}
+
+// GetWireguardService returns the wireguard service for a given wireguard instance
+func GetWireguardService(
+	apiClient *http.Client,
+	apiEndpoint string,
+	encryptionKey string,
+	wireguardInstance *v0.WireguardInstance,
+) (*unstructured.Unstructured, error) {
+	// get kubernetes runtime instance
+	kubernetesRuntimeInstance, err := GetWireguardKubernetesRuntimeInstance(apiClient, apiEndpoint, wireguardInstance)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes runtime instance: %w", err)
+	}
+
+	// get wireguard service
+	kubeClient, _, err := kube.GetClient(
+		kubernetesRuntimeInstance,
+		false,
+		apiClient,
+		apiEndpoint,
+		encryptionKey,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes client: %w", err)
+	}
+
+	// list loadbalancer services
+	serviceList, err := kubeClient.Resource(
+		schema.GroupVersionResource{
+			Group:    "",
+			Version:  "v1",
+			Resource: "services",
+		},
+	).Namespace(*wireguardInstance.Name).List(
+		context.Background(),
+		metav1.ListOptions{
+			FieldSelector: "spec.type=LoadBalancer",
+		},
+	)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("failed to list services: %w", err)
+	case len(serviceList.Items) == 0:
+		return nil, fmt.Errorf("failed to find wireguard service of type loadbalancer")
+	case len(serviceList.Items) > 1:
+		return nil, fmt.Errorf("found multiple wireguard services of type loadbalancer")
+	}
+
+	// return service
+	return &serviceList.Items[0], nil
+}
+
+// GetWireguardKubernetesRuntimeInstance returns the kubernetes runtime
+// instance for a given wireguard instance
+func GetWireguardKubernetesRuntimeInstance(
+	apiClient *http.Client,
+	apiEndpoint string,
+	wireguardInstance *v0.WireguardInstance,
+) (*tpapi.KubernetesRuntimeInstance, error) {
+
+	// get runtime instance id
+	kubernetesRuntimeInstanceId, err := tpclient.GetObjectIdByAttachedObject(
+		apiClient,
+		apiEndpoint,
+		tpapi.ObjectTypeKubernetesRuntimeInstance,
+		v0.ObjectTypeWireguardInstance,
+		*wireguardInstance.ID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes runtime instance by attachment: %w", err)
+	}
+
+	// get runtime instance
+	kubernetesRuntimeInstance, err := tpclient.GetKubernetesRuntimeInstanceByID(
+		apiClient,
+		apiEndpoint,
+		*kubernetesRuntimeInstanceId,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes runtime instance: %w", err)
+	}
+
+	return kubernetesRuntimeInstance, nil
 }
