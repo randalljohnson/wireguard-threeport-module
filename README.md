@@ -21,7 +21,7 @@ mage build:plugin
 
 ## Usage
 
-### Creating a Wireguard Configuration
+### Creating a Wireguard object in Threeport
 
 1. Create a configuration file (e.g., `wireguard-config.yaml`):
 ```yaml
@@ -48,7 +48,7 @@ Consider redirecting output to a file if you wish to avoid this.
 
 Download your relevant Wireguard client [here](https://www.wireguard.com/install/) and use the above file to configure it.
 
-### Deleting a Wireguard Configuration
+### Deleting a Wireguard Object in Threeport
 
 To remove a Wireguard configuration:
 ```bash
@@ -61,3 +61,7 @@ For development purposes, you can enable debug mode during installation:
 ```bash
 ./bin/wireguard install --debug
 ```
+
+This deploys the API server and controller with [Delve](https://github.com/go-delve/delve) and allows remote debugging
+to occur on each pod's port 40000. Use `kubectl port-forward`, `k9s` or similar to set up
+the port forward and run Delve locally to debug.
