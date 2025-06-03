@@ -25,7 +25,7 @@ import (
 var getWireguardConfigVersion string
 var wireguardInstanceName string
 
-// GetWireguardConfigCmd represents the wireguard-definition command
+// GetWireguardConfigCmd represents the wireguard-config command
 var GetWireguardConfigCmd = &cobra.Command{
 	Example: "  tptctl wireguard get wireguard-config",
 	Long:    "Get wireguard configuration from the system.",
