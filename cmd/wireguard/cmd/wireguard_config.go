@@ -151,7 +151,6 @@ func getWireguardConfigVersionV0(
 		}
 	}
 
-	// get wireguard private key secrets
 	// get wireguard kubernetes runtime instance
 	kubernetesRuntimeInstance, err := wireguard.GetWireguardKubernetesRuntimeInstance(
 		apiClient,
@@ -162,7 +161,7 @@ func getWireguardConfigVersionV0(
 		return "", fmt.Errorf("failed to get wireguard kubernetes runtime instance: %w", err)
 	}
 
-	// get wireguard secrets
+	// initialize kubernetes client
 	kubeClient, _, err := kube.GetClient(
 		kubernetesRuntimeInstance,
 		false,
@@ -238,7 +237,10 @@ func getWireguardSecret(
 	).Namespace(secretNamespace).List(
 		context.Background(),
 		metav1.ListOptions{
-			FieldSelector: fmt.Sprintf("metadata.name=%s", secretName),
+			FieldSelector: fmt.Sprintf(
+				"metadata.name=%s",
+				secretName,
+			),
 		},
 	)
 	switch {
