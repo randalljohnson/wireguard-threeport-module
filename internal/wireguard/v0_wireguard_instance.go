@@ -126,30 +126,39 @@ func createHelmWorkloadInstance(
 	}
 
 	// get associated WireguardDefinition
-	wireguardDef, err := tpclient_v0.GetWireguardDefinitionByID(r.APIClient, r.APIServer, *wireguardInstance.WireguardDefinitionID)
+	wireguardDef, err := tpclient_v0.GetWireguardDefinitionByID(
+		r.APIClient,
+		r.APIServer,
+		*wireguardInstance.WireguardDefinitionID,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to get WireguardDefinition: %w", err)
 	}
 
 	// get associated HelmWorkloadDefinition
-	helmWorkloadDef, err := helmclient_v0.GetHelmWorkloadDefinitionByName(r.APIClient, r.APIServer, *wireguardDef.Name)
+	helmWorkloadDef, err := helmclient_v0.GetHelmWorkloadDefinitionByName(
+		r.APIClient,
+		r.APIServer,
+		*wireguardDef.Name,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to get HelmWorkloadDefinition: %w", err)
 	}
 
 	// create HelmWorkloadInstance for wg-portal chart
-	helmWorkloadInst := &tpapi_v0.HelmWorkloadInstance{
-		Instance: tpapi_v0.Instance{
-			Name: wireguardInstance.Name,
+	createdInst, err := helmclient_v0.CreateHelmWorkloadInstance(
+		r.APIClient,
+		r.APIServer,
+		&tpapi_v0.HelmWorkloadInstance{
+			Instance: tpapi_v0.Instance{
+				Name: wireguardInstance.Name,
+			},
+			HelmWorkloadDefinitionID:    helmWorkloadDef.ID,
+			ValuesDocument:              helmWorkloadDef.ValuesDocument,
+			KubernetesRuntimeInstanceID: kubernetesRuntimeInstanceId,
+			ReleaseNamespace:            wireguardInstance.Name,
 		},
-		HelmWorkloadDefinitionID:    helmWorkloadDef.ID,
-		ValuesDocument:              helmWorkloadDef.ValuesDocument,
-		KubernetesRuntimeInstanceID: kubernetesRuntimeInstanceId,
-		ReleaseNamespace:            wireguardInstance.Name,
-	}
-
-	// create HelmWorkloadInstance
-	createdInst, err := helmclient_v0.CreateHelmWorkloadInstance(r.APIClient, r.APIServer, helmWorkloadInst)
+	)
 	if err != nil && !errors.Is(err, tpclient_lib.ErrConflict) {
 		return fmt.Errorf("failed to create HelmWorkloadInstance: %w", err)
 	}
@@ -165,7 +174,11 @@ func cleanupHelmWorkloadInstance(
 	log *logr.Logger,
 ) error {
 	// get associated HelmWorkloadInstance by name
-	helmWorkloadInst, err := helmclient_v0.GetHelmWorkloadInstanceByName(r.APIClient, r.APIServer, *wireguardInstance.Name)
+	helmWorkloadInst, err := helmclient_v0.GetHelmWorkloadInstanceByName(
+		r.APIClient,
+		r.APIServer,
+		*wireguardInstance.Name,
+	)
 	if err != nil {
 		if errors.Is(err, tpclient_lib.ErrObjectNotFound) {
 			// instance already deleted, nothing to do
@@ -175,7 +188,11 @@ func cleanupHelmWorkloadInstance(
 	}
 
 	// delete HelmWorkloadInstance
-	_, err = helmclient_v0.DeleteHelmWorkloadInstance(r.APIClient, r.APIServer, *helmWorkloadInst.ID)
+	_, err = helmclient_v0.DeleteHelmWorkloadInstance(
+		r.APIClient,
+		r.APIServer,
+		*helmWorkloadInst.ID,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to delete HelmWorkloadInstance: %w", err)
 	}
@@ -226,7 +243,11 @@ func setupOciResources(
 	log *logr.Logger,
 ) (*OciSetup, error) {
 	// get kubernetes runtime instance
-	kubernetesRuntimeInstance, err := GetWireguardKubernetesRuntimeInstance(r.APIClient, r.APIServer, wireguardInstance)
+	kubernetesRuntimeInstance, err := GetWireguardKubernetesRuntimeInstance(
+		r.APIClient,
+		r.APIServer,
+		wireguardInstance,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get kubernetes runtime instance: %w", err)
 	}
@@ -348,7 +369,11 @@ func setupOciResources(
 	}
 
 	// get port
-	ports, found, err := unstructured.NestedSlice(serviceObj.Object, "spec", "ports")
+	ports, found, err := unstructured.NestedSlice(
+		serviceObj.Object,
+		"spec",
+		"ports",
+	)
 	if err != nil || !found {
 		return nil, fmt.Errorf("failed to get ports from service: %w", err)
 	}
@@ -384,7 +409,7 @@ func setupOciResources(
 		return nil, fmt.Errorf("loadbalancer subnet has no security lists")
 	}
 
-	// get security lists
+	// get worker security list
 	workerSecurityList, err := vcnClient.GetSecurityList(context.Background(), core.GetSecurityListRequest{
 		SecurityListId: &workerSubnet.SecurityListIds[0],
 	})
@@ -392,6 +417,7 @@ func setupOciResources(
 		return nil, fmt.Errorf("failed to get worker subnet security list: %w", err)
 	}
 
+	// get loadbalancer security list
 	lbSecurityList, err := vcnClient.GetSecurityList(context.Background(), core.GetSecurityListRequest{
 		SecurityListId: &lbSubnet.SecurityListIds[0],
 	})
@@ -418,7 +444,7 @@ func configureSecurityListRules(
 ) error {
 	setup, err := setupOciResources(r, wireguardInstance, log)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to setup OCI resources: %w", err)
 	}
 
 	// create security list manager
@@ -513,10 +539,7 @@ func removeSecurityListRules(
 ) error {
 	setup, err := setupOciResources(r, wireguardInstance, log)
 	if err != nil {
-		return err
-	}
-	if setup == nil {
-		return nil // not running on OCI
+		return fmt.Errorf("failed to setup OCI resources: %w", err)
 	}
 
 	// create security list manager
@@ -526,16 +549,23 @@ func removeSecurityListRules(
 	}
 
 	// remove loadbalancer rules
-	if err := manager.removeSecurityRules(setup.lbSecurityList, getModulePrefix(wireguardInstance)); err != nil {
+	if err := manager.removeSecurityRules(
+		setup.lbSecurityList,
+		getModulePrefix(wireguardInstance),
+	); err != nil {
 		return fmt.Errorf("failed to remove loadbalancer security rule: %w", err)
 	}
 
 	// remove worker rules
-	if err := manager.removeSecurityRules(setup.workerSecurityList, getModulePrefix(wireguardInstance)); err != nil {
+	if err := manager.removeSecurityRules(
+		setup.workerSecurityList,
+		getModulePrefix(wireguardInstance),
+	); err != nil {
 		return fmt.Errorf("failed to remove worker security rule: %w", err)
 	}
 
-	log.Info("successfully removed security list rules for wireguard",
+	log.Info(
+		"successfully removed security list rules for wireguard",
 		"instance", *wireguardInstance.Name,
 		"workerSubnet", *setup.workerSubnet.DisplayName,
 		"lbSubnet", *setup.lbSubnet.DisplayName,
@@ -563,7 +593,11 @@ func (m *SecurityListManager) addSecurityRule(securityList *core.SecurityList, c
 
 	switch config.Direction {
 	case SecurityRuleDirectionIngress:
-		if m.findExistingRule(securityList.IngressSecurityRules, config.Description, config.Port) {
+		if m.findExistingRule(
+			securityList.IngressSecurityRules,
+			config.Description,
+			config.Port,
+		) {
 			return nil
 		}
 
@@ -585,7 +619,11 @@ func (m *SecurityListManager) addSecurityRule(securityList *core.SecurityList, c
 		}
 
 	case SecurityRuleDirectionEgress:
-		if m.findExistingEgressRule(securityList.EgressSecurityRules, config.Description, config.Port) {
+		if m.findExistingEgressRule(
+			securityList.EgressSecurityRules,
+			config.Description,
+			config.Port,
+		) {
 			return nil
 		}
 
@@ -626,7 +664,11 @@ func (m *SecurityListManager) addSecurityRule(securityList *core.SecurityList, c
 }
 
 // findExistingRule checks if a rule already exists in security list
-func (m *SecurityListManager) findExistingRule(rules []core.IngressSecurityRule, description string, port int32) bool {
+func (m *SecurityListManager) findExistingRule(
+	rules []core.IngressSecurityRule,
+	description string,
+	port int32,
+) bool {
 	for _, rule := range rules {
 		if rule.Description != nil && *rule.Description == description {
 			return true
@@ -636,7 +678,11 @@ func (m *SecurityListManager) findExistingRule(rules []core.IngressSecurityRule,
 }
 
 // findExistingEgressRule checks if an egress rule already exists in security list
-func (m *SecurityListManager) findExistingEgressRule(rules []core.EgressSecurityRule, description string, port int32) bool {
+func (m *SecurityListManager) findExistingEgressRule(
+	rules []core.EgressSecurityRule,
+	description string,
+	port int32,
+) bool {
 	for _, rule := range rules {
 		if rule.Description != nil && *rule.Description == description {
 			return true
@@ -695,7 +741,11 @@ func GetWireguardService(
 	wireguardInstance *v0.WireguardInstance,
 ) (*unstructured.Unstructured, error) {
 	// get kubernetes runtime instance
-	kubernetesRuntimeInstance, err := GetWireguardKubernetesRuntimeInstance(apiClient, apiEndpoint, wireguardInstance)
+	kubernetesRuntimeInstance, err := GetWireguardKubernetesRuntimeInstance(
+		apiClient,
+		apiEndpoint,
+		wireguardInstance,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get kubernetes runtime instance: %w", err)
 	}
