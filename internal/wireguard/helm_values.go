@@ -38,7 +38,13 @@ DNS = 8.8.8.8
 [Peer]
 PublicKey = %s
 AllowedIPs = %s`
-	formattedWg0Conf := fmt.Sprintf(wg0conf, serverIP, wireguardPort, clientPublicKey, clientIP)
+	formattedWg0Conf := fmt.Sprintf(
+		wg0conf,
+		serverIP,
+		wireguardPort,
+		clientPublicKey,
+		clientIP,
+	)
 
 	iptablesScript := `#!/bin/bash
 IPT="/sbin/iptables"
@@ -54,7 +60,11 @@ $IPT -I INPUT 1 -i $WG_FACE -j ACCEPT
 $IPT -I FORWARD 1 -i $IN_FACE -o $WG_FACE -j ACCEPT
 $IPT -I FORWARD 1 -i $WG_FACE -o $IN_FACE -j ACCEPT
 $IPT -I INPUT 1 -i $IN_FACE -p udp --dport $WG_PORT -j ACCEPT`
-	formattedIpTablesScript := fmt.Sprintf(iptablesScript, subnet, wireguardPort)
+	formattedIpTablesScript := fmt.Sprintf(
+		iptablesScript,
+		subnet,
+		wireguardPort,
+	)
 
 	extraDeploy := []interface{}{
 		map[string]interface{}{
