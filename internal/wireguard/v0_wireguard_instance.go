@@ -3,13 +3,28 @@
 package wireguard
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
 
 	logr "github.com/go-logr/logr"
+	"github.com/oracle/oci-go-sdk/v65/common"
+	"github.com/oracle/oci-go-sdk/v65/containerengine"
+	"github.com/oracle/oci-go-sdk/v65/core"
 	v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/api/v0"
+	tpclient_v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/client/v0"
+	tpapi "github.com/threeport/threeport/pkg/api/v0"
+	tpapi_v0 "github.com/threeport/threeport/pkg/api/v0"
+	tpclient_lib "github.com/threeport/threeport/pkg/client/lib/v0"
+	helmclient_v0 "github.com/threeport/threeport/pkg/client/v0"
+	tpclient "github.com/threeport/threeport/pkg/client/v0"
 	controller "github.com/threeport/threeport/pkg/controller/v0"
+	kube "github.com/threeport/threeport/pkg/kube/v0"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // v0WireguardInstanceCreated performs reconciliation when a v0 WireguardInstance
@@ -19,9 +34,20 @@ func v0WireguardInstanceCreated(
 	wireguardInstance *v0.WireguardInstance,
 	log *logr.Logger,
 ) (int64, error) {
+	// create HelmWorkloadInstance
+	if err := createHelmWorkloadInstance(r, wireguardInstance, log); err != nil {
+		return 0, fmt.Errorf("failed to create HelmWorkloadInstance: %w", err)
+	}
+
+	// configure security list rules
+	if err := configureSecurityListRules(r, wireguardInstance, log); err != nil {
+		return 0, fmt.Errorf("failed to configure security list rules: %w", err)
+	}
+
 	return 0, nil
 }
 
+// TODO: implement with support for updating configuration without changing wireguard keys
 // v0WireguardInstanceUpdated performs reconciliation when a v0 WireguardInstance
 // has been updated.
 func v0WireguardInstanceUpdated(
@@ -29,6 +55,35 @@ func v0WireguardInstanceUpdated(
 	wireguardInstance *v0.WireguardInstance,
 	log *logr.Logger,
 ) (int64, error) {
+	// // get HelmWorkloadInstance
+	// helmWorkloadInst, err := helmclient_v0.GetHelmWorkloadInstanceByName(r.APIClient, r.APIServer, *wireguardInstance.Name)
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to get HelmWorkloadInstance: %w", err)
+	// }
+
+	// // marshal helm values
+	// values, err := getHelmValues()
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	// }
+	// valuesYAML, err := yaml.Marshal(values)
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	// }
+	// valuesStr := string(valuesYAML)
+
+	// // update values
+	// helmWorkloadInst.ValuesDocument = &valuesStr
+
+	// // update HelmWorkloadInstance
+	// updatedInst, err := helmclient_v0.UpdateHelmWorkloadInstance(r.APIClient, r.APIServer, helmWorkloadInst)
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to update HelmWorkloadInstance: %w", err)
+	// }
+
+	// // log update
+	// log.Info("updated HelmWorkloadInstance", "name", updatedInst.Name)
+
 	return 0, nil
 }
 
@@ -39,30 +94,729 @@ func v0WireguardInstanceDeleted(
 	wireguardInstance *v0.WireguardInstance,
 	log *logr.Logger,
 ) (int64, error) {
+	// remove security list rules
+	if err := removeSecurityListRules(r, wireguardInstance, log); err != nil {
+		log.Error(err, "failed to remove security list rules, proceeding with HelmWorkloadInstance deletion")
+	}
+
+	// delete HelmWorkloadInstance
+	if err := deleteHelmWorkloadInstance(r, wireguardInstance, log); err != nil {
+		return 0, fmt.Errorf("failed to cleanup HelmWorkloadInstance: %w", err)
+	}
+
 	return 0, nil
 }
 
-// calculateConfigMapHash calculates a hash of all ConfigMap objects in the extraDeploy list
-func calculateConfigMapHash(extraDeploy []interface{}) string {
-	var configMaps []map[string]interface{}
+// createHelmWorkloadInstance creates a new HelmWorkloadInstance for a Wireguard instance
+func createHelmWorkloadInstance(
+	r *controller.Reconciler,
+	wireguardInstance *v0.WireguardInstance,
+	log *logr.Logger,
+) error {
+	// get runtime instance id
+	kubernetesRuntimeInstanceId, err := tpclient.GetObjectIdByAttachedObject(
+		r.APIClient,
+		r.APIServer,
+		tpapi.ObjectTypeKubernetesRuntimeInstance,
+		v0.ObjectTypeWireguardInstance,
+		*wireguardInstance.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to get Kubernetes runtime instance by attachment: %w", err)
+	}
 
-	// Extract ConfigMap objects from extraDeploy
-	for _, obj := range extraDeploy {
-		if objMap, ok := obj.(map[string]interface{}); ok {
-			if kind, ok := objMap["kind"].(string); ok && kind == "ConfigMap" {
-				configMaps = append(configMaps, objMap)
+	// get associated WireguardDefinition
+	wireguardDef, err := tpclient_v0.GetWireguardDefinitionByID(
+		r.APIClient,
+		r.APIServer,
+		*wireguardInstance.WireguardDefinitionID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to get WireguardDefinition: %w", err)
+	}
+
+	// get associated HelmWorkloadDefinition
+	helmWorkloadDef, err := helmclient_v0.GetHelmWorkloadDefinitionByName(
+		r.APIClient,
+		r.APIServer,
+		*wireguardDef.Name,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to get HelmWorkloadDefinition: %w", err)
+	}
+
+	// create HelmWorkloadInstance for wg-portal chart
+	createdInst, err := helmclient_v0.CreateHelmWorkloadInstance(
+		r.APIClient,
+		r.APIServer,
+		&tpapi_v0.HelmWorkloadInstance{
+			Instance: tpapi_v0.Instance{
+				Name: wireguardInstance.Name,
+			},
+			HelmWorkloadDefinitionID:    helmWorkloadDef.ID,
+			ValuesDocument:              helmWorkloadDef.ValuesDocument,
+			KubernetesRuntimeInstanceID: kubernetesRuntimeInstanceId,
+			ReleaseNamespace:            wireguardInstance.Name,
+		},
+	)
+	if err != nil && !errors.Is(err, tpclient_lib.ErrConflict) {
+		return fmt.Errorf("failed to create HelmWorkloadInstance: %w", err)
+	}
+
+	log.Info("created HelmWorkloadInstance", "name", createdInst.Name)
+	return nil
+}
+
+// deleteHelmWorkloadInstance deletes a HelmWorkloadInstance associated with a Wireguard instance
+func deleteHelmWorkloadInstance(
+	r *controller.Reconciler,
+	wireguardInstance *v0.WireguardInstance,
+	log *logr.Logger,
+) error {
+	// get associated HelmWorkloadInstance by name
+	helmWorkloadInst, err := helmclient_v0.GetHelmWorkloadInstanceByName(
+		r.APIClient,
+		r.APIServer,
+		*wireguardInstance.Name,
+	)
+	if err != nil {
+		if errors.Is(err, tpclient_lib.ErrObjectNotFound) {
+			// instance already deleted, nothing to do
+			return nil
+		}
+		return fmt.Errorf("failed to get HelmWorkloadInstance: %w", err)
+	}
+
+	// delete HelmWorkloadInstance
+	_, err = helmclient_v0.DeleteHelmWorkloadInstance(
+		r.APIClient,
+		r.APIServer,
+		*helmWorkloadInst.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete HelmWorkloadInstance: %w", err)
+	}
+
+	log.Info("deleted HelmWorkloadInstance", "name", helmWorkloadInst.Name)
+	return nil
+}
+
+// OciSetup holds all necessary OCI clients and resources
+type OciSetup struct {
+	vcnClient          core.VirtualNetworkClient
+	containerClient    containerengine.ContainerEngineClient
+	lbSubnet           *core.Subnet
+	workerSubnet       *core.Subnet
+	wireguardPort      int32
+	lbSecurityList     *core.SecurityList
+	workerSecurityList *core.SecurityList
+}
+
+// SecurityListManager manages security list rules
+type SecurityListManager struct {
+	vcnClient *core.VirtualNetworkClient
+	log       *logr.Logger
+}
+
+// SecurityRuleConfig represents configuration for a security rule
+type SecurityRuleConfig struct {
+	Protocol    string
+	Source      string
+	Destination string
+	Description string
+	Port        int32
+	Direction   string // "ingress" or "egress"
+}
+
+// define constants for security list rules
+const (
+	SecurityRuleDirectionIngress = "ingress"
+	SecurityRuleDirectionEgress  = "egress"
+	SecurityRuleProtocolUDP      = "17"
+	SecurityRuleProtocolAll      = "all"
+)
+
+// setupOciResources initializes OCI clients and retrieves necessary resources
+func setupOciResources(
+	r *controller.Reconciler,
+	wireguardInstance *v0.WireguardInstance,
+	log *logr.Logger,
+) (*OciSetup, error) {
+	// get kubernetes runtime instance
+	kubernetesRuntimeInstance, err := GetWireguardKubernetesRuntimeInstance(
+		r.APIClient,
+		r.APIServer,
+		wireguardInstance,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes runtime instance: %w", err)
+	}
+
+	// get runtime definition
+	kubernetesRuntimeDef, err := tpclient.GetKubernetesRuntimeDefinitionByID(
+		r.APIClient,
+		r.APIServer,
+		*kubernetesRuntimeInstance.KubernetesRuntimeDefinitionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes runtime definition: %w", err)
+	}
+
+	// check infra provider
+	if *kubernetesRuntimeDef.InfraProvider != tpapi_v0.KubernetesRuntimeInfraProviderOKE {
+		return nil, fmt.Errorf("only oke is supported")
+	}
+
+	// get oci account
+	ociAccount, err := tpclient.GetOciAccountByName(
+		r.APIClient,
+		r.APIServer,
+		"default-account",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get default oci account: %w", err)
+	}
+
+	// init oci client
+	ociClient := common.NewRawConfigurationProvider(
+		*ociAccount.TenancyOCID,
+		*ociAccount.UserOCID,
+		*ociAccount.DefaultRegion,
+		*ociAccount.KeyFingerprint,
+		*ociAccount.PrivateKey,
+		nil,
+	)
+
+	// get oke instance
+	ociOkeRuntimeInstance, err := tpclient.GetOciOkeKubernetesRuntimeInstanceByName(
+		r.APIClient,
+		r.APIServer,
+		*kubernetesRuntimeInstance.Name,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get oci oke runtime instance: %w", err)
+	}
+
+	// create oci clients
+	vcnClient, err := core.NewVirtualNetworkClientWithConfigurationProvider(ociClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create vcn client: %w", err)
+	}
+	containerClient, err := containerengine.NewContainerEngineClientWithConfigurationProvider(ociClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create container engine client: %w", err)
+	}
+
+	// get cluster details
+	cluster, err := containerClient.GetCluster(context.Background(), containerengine.GetClusterRequest{
+		ClusterId: ociOkeRuntimeInstance.ClusterOCID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cluster details: %w", err)
+	}
+
+	// get loadbalancer subnet
+	lbSubnetID := cluster.Options.ServiceLbSubnetIds[0]
+	lbSubnetResp, err := vcnClient.GetSubnet(context.Background(), core.GetSubnetRequest{
+		SubnetId: &lbSubnetID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get loadbalancer subnet: %w", err)
+	}
+	lbSubnet := &lbSubnetResp.Subnet
+
+	// get node pools
+	nodePools, err := containerClient.ListNodePools(context.Background(), containerengine.ListNodePoolsRequest{
+		CompartmentId: ociAccount.TenancyOCID,
+		ClusterId:     ociOkeRuntimeInstance.ClusterOCID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list node pools: %w", err)
+	}
+
+	// get worker subnet
+	var workerSubnet *core.Subnet
+	for _, nodePool := range nodePools.Items {
+		if len(nodePool.SubnetIds) > 0 {
+			workerSubnetID := nodePool.SubnetIds[0]
+			workerSubnetResp, err := vcnClient.GetSubnet(context.Background(), core.GetSubnetRequest{
+				SubnetId: &workerSubnetID,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to get worker subnet: %w", err)
 			}
+			workerSubnet = &workerSubnetResp.Subnet
+			break
 		}
 	}
 
-	// Sort configMaps by name to ensure consistent hashing
-	// Convert to JSON for hashing
-	jsonBytes, err := json.Marshal(configMaps)
-	if err != nil {
-		return ""
+	if workerSubnet == nil {
+		return nil, fmt.Errorf("failed to find worker subnet in node pools")
 	}
 
-	// Calculate SHA-256 hash
-	hash := sha256.Sum256(jsonBytes)
-	return hex.EncodeToString(hash[:])
+	// get wireguard service
+	serviceObj, err := GetWireguardService(
+		r.APIClient,
+		r.APIServer,
+		r.EncryptionKey,
+		wireguardInstance,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get wireguard service: %w", err)
+	}
+
+	// get port
+	ports, found, err := unstructured.NestedSlice(
+		serviceObj.Object,
+		"spec",
+		"ports",
+	)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("failed to get ports from service: %w", err)
+	case !found:
+		return nil, fmt.Errorf("failed to find ports in service")
+	}
+
+	// get wireguard port
+	var wireguardPort int32
+	for _, port := range ports {
+		portMap, ok := port.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if name, ok := portMap["name"].(string); ok && name == "wg0" {
+			if nodePort, ok := portMap["nodePort"].(int64); ok {
+				wireguardPort = int32(nodePort)
+				break
+			}
+			// sometimes nodePort may be float64
+			if nodePort, ok := portMap["nodePort"].(float64); ok {
+				wireguardPort = int32(nodePort)
+				break
+			}
+		}
+	}
+	if wireguardPort == 0 {
+		return nil, fmt.Errorf("failed to find wireguard port in service")
+	}
+
+	// check for empty security lists
+	if len(workerSubnet.SecurityListIds) == 0 {
+		return nil, fmt.Errorf("worker subnet has no security lists")
+	}
+	if len(lbSubnet.SecurityListIds) == 0 {
+		return nil, fmt.Errorf("loadbalancer subnet has no security lists")
+	}
+
+	// get worker security list
+	workerSecurityList, err := vcnClient.GetSecurityList(context.Background(), core.GetSecurityListRequest{
+		SecurityListId: &workerSubnet.SecurityListIds[0],
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get worker subnet security list: %w", err)
+	}
+
+	// get loadbalancer security list
+	lbSecurityList, err := vcnClient.GetSecurityList(context.Background(), core.GetSecurityListRequest{
+		SecurityListId: &lbSubnet.SecurityListIds[0],
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get loadbalancer subnet security list: %w", err)
+	}
+
+	return &OciSetup{
+		vcnClient:          vcnClient,
+		containerClient:    containerClient,
+		lbSubnet:           lbSubnet,
+		workerSubnet:       workerSubnet,
+		wireguardPort:      wireguardPort,
+		lbSecurityList:     &lbSecurityList.SecurityList,
+		workerSecurityList: &workerSecurityList.SecurityList,
+	}, nil
+}
+
+// configureSecurityListRules configures necessary security list rules for Wireguard
+func configureSecurityListRules(
+	r *controller.Reconciler,
+	wireguardInstance *v0.WireguardInstance,
+	log *logr.Logger,
+) error {
+	setup, err := setupOciResources(r, wireguardInstance, log)
+	if err != nil {
+		return fmt.Errorf("failed to setup OCI resources: %w", err)
+	}
+
+	// create security list manager
+	manager := &SecurityListManager{
+		vcnClient: &setup.vcnClient,
+		log:       log,
+	}
+
+	// add loadbalancer ingress rule
+	if err := manager.addSecurityRule(
+		setup.lbSecurityList,
+		SecurityRuleConfig{
+			Protocol: SecurityRuleProtocolUDP,
+			Source:   "0.0.0.0/0",
+			Description: fmt.Sprintf(
+				"%s: Allow Wireguard UDP traffic",
+				getModulePrefix(wireguardInstance),
+			),
+			Port:      51820,
+			Direction: SecurityRuleDirectionIngress,
+		},
+	); err != nil {
+		return fmt.Errorf("failed to add loadbalancer ingress security rule: %w", err)
+	}
+
+	// add loadbalancer egress rule to worker subnet
+	if err := manager.addSecurityRule(
+		setup.lbSecurityList,
+		SecurityRuleConfig{
+			Protocol:    SecurityRuleProtocolUDP,
+			Destination: *setup.workerSubnet.CidrBlock,
+			Description: fmt.Sprintf(
+				"%s: Allow Wireguard UDP traffic to worker subnet",
+				getModulePrefix(wireguardInstance),
+			),
+			Port:      setup.wireguardPort,
+			Direction: SecurityRuleDirectionEgress,
+		},
+	); err != nil {
+		return fmt.Errorf("failed to add loadbalancer egress security rule: %w", err)
+	}
+
+	// add worker ingress rule
+	if err := manager.addSecurityRule(
+		setup.workerSecurityList,
+		SecurityRuleConfig{
+			Protocol: SecurityRuleProtocolUDP,
+			Source:   *setup.workerSubnet.CidrBlock,
+			Description: fmt.Sprintf(
+				"%s: Allow Wireguard UDP traffic",
+				getModulePrefix(wireguardInstance),
+			),
+			Port:      setup.wireguardPort,
+			Direction: SecurityRuleDirectionIngress,
+		},
+	); err != nil {
+		return fmt.Errorf("failed to add worker ingress security rule: %w", err)
+	}
+
+	// add worker egress rule
+	if err := manager.addSecurityRule(
+		setup.workerSecurityList,
+		SecurityRuleConfig{
+			Protocol:    SecurityRuleProtocolAll,
+			Destination: "0.0.0.0/0",
+			Description: fmt.Sprintf(
+				"%s: Allow Wireguard traffic to internet",
+				getModulePrefix(wireguardInstance),
+			),
+			Direction: SecurityRuleDirectionEgress,
+		},
+	); err != nil {
+		return fmt.Errorf("failed to add worker egress security rule: %w", err)
+	}
+
+	log.Info(
+		"successfully configured security list rules for wireguard",
+		"instance", *wireguardInstance.Name,
+		"port", setup.wireguardPort,
+		"workerSubnet", *setup.workerSubnet.DisplayName,
+		"lbSubnet", *setup.lbSubnet.DisplayName,
+	)
+
+	return nil
+}
+
+// removeSecurityListRules removes security list rules for Wireguard
+func removeSecurityListRules(
+	r *controller.Reconciler,
+	wireguardInstance *v0.WireguardInstance,
+	log *logr.Logger,
+) error {
+	setup, err := setupOciResources(r, wireguardInstance, log)
+	if err != nil {
+		return fmt.Errorf("failed to setup OCI resources: %w", err)
+	}
+
+	// create security list manager
+	manager := &SecurityListManager{
+		vcnClient: &setup.vcnClient,
+		log:       log,
+	}
+
+	// remove loadbalancer rules
+	if err := manager.removeSecurityRules(
+		setup.lbSecurityList,
+		getModulePrefix(wireguardInstance),
+	); err != nil {
+		return fmt.Errorf("failed to remove loadbalancer security rule: %w", err)
+	}
+
+	// remove worker rules
+	if err := manager.removeSecurityRules(
+		setup.workerSecurityList,
+		getModulePrefix(wireguardInstance),
+	); err != nil {
+		return fmt.Errorf("failed to remove worker security rule: %w", err)
+	}
+
+	log.Info(
+		"successfully removed security list rules for wireguard",
+		"instance", *wireguardInstance.Name,
+		"workerSubnet", *setup.workerSubnet.DisplayName,
+		"lbSubnet", *setup.lbSubnet.DisplayName,
+	)
+
+	return nil
+}
+
+// todo: how should this include the control plane instance name?
+// getModulePrefix returns a prefixed string for the module
+func getModulePrefix(
+	// controlPlaneInstance *tpapi.ControlPlaneInstance,
+	wireguardInstance *v0.WireguardInstance,
+) string {
+	return fmt.Sprintf(
+		"%s/%s",
+		"wireguard-threeport-module",
+		*wireguardInstance.Name,
+	)
+}
+
+// addSecurityRule adds a new security rule to a security list if it doesn't exist
+func (m *SecurityListManager) addSecurityRule(securityList *core.SecurityList, config SecurityRuleConfig) error {
+	var updateDetails core.UpdateSecurityListDetails
+
+	switch config.Direction {
+	case SecurityRuleDirectionIngress:
+		if m.findExistingRule(
+			securityList.IngressSecurityRules,
+			config.Description,
+			config.Port,
+		) {
+			return nil
+		}
+
+		newRule := core.IngressSecurityRule{
+			Protocol:    common.String(config.Protocol),
+			Source:      common.String(config.Source),
+			Description: common.String(config.Description),
+			UdpOptions: &core.UdpOptions{
+				DestinationPortRange: &core.PortRange{
+					Min: common.Int(int(config.Port)),
+					Max: common.Int(int(config.Port)),
+				},
+			},
+		}
+
+		rules := append(securityList.IngressSecurityRules, newRule)
+		updateDetails = core.UpdateSecurityListDetails{
+			IngressSecurityRules: rules,
+		}
+
+	case SecurityRuleDirectionEgress:
+		if m.findExistingEgressRule(
+			securityList.EgressSecurityRules,
+			config.Description,
+			config.Port,
+		) {
+			return nil
+		}
+
+		newRule := core.EgressSecurityRule{
+			Protocol:    common.String(config.Protocol),
+			Destination: common.String(config.Destination),
+			Description: common.String(config.Description),
+		}
+
+		// if port is unset (e.g. 0), we allow all protocols to all ports
+		if config.Protocol == SecurityRuleProtocolUDP && config.Port != 0 {
+			newRule.UdpOptions = &core.UdpOptions{
+				DestinationPortRange: &core.PortRange{
+					Min: common.Int(int(config.Port)),
+					Max: common.Int(int(config.Port)),
+				},
+			}
+		}
+
+		rules := append(securityList.EgressSecurityRules, newRule)
+		updateDetails = core.UpdateSecurityListDetails{
+			EgressSecurityRules: rules,
+		}
+
+	default:
+		return fmt.Errorf("invalid security rule direction: %s", config.Direction)
+	}
+
+	_, err := m.vcnClient.UpdateSecurityList(context.Background(), core.UpdateSecurityListRequest{
+		SecurityListId:            securityList.Id,
+		UpdateSecurityListDetails: updateDetails,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update security list %s rules: %w", config.Direction, err)
+	}
+
+	return nil
+}
+
+// findExistingRule checks if a rule already exists in security list
+func (m *SecurityListManager) findExistingRule(
+	rules []core.IngressSecurityRule,
+	description string,
+	port int32,
+) bool {
+	for _, rule := range rules {
+		if rule.Description != nil && *rule.Description == description {
+			return true
+		}
+	}
+	return false
+}
+
+// findExistingEgressRule checks if an egress rule already exists in security list
+func (m *SecurityListManager) findExistingEgressRule(
+	rules []core.EgressSecurityRule,
+	description string,
+	port int32,
+) bool {
+	for _, rule := range rules {
+		if rule.Description != nil && *rule.Description == description {
+			return true
+		}
+	}
+	return false
+}
+
+// removeSecurityRules removes security rules matching the description prefix for a given
+// security list
+func (m *SecurityListManager) removeSecurityRules(securityList *core.SecurityList, descriptionPrefix string) error {
+	// handle ingress rules
+	var updatedIngressRules []core.IngressSecurityRule
+	for _, rule := range securityList.IngressSecurityRules {
+		if rule.Description != nil &&
+			strings.HasPrefix(*rule.Description, descriptionPrefix) {
+			continue
+		}
+		updatedIngressRules = append(updatedIngressRules, rule)
+	}
+
+	// handle egress rules
+	var updatedEgressRules []core.EgressSecurityRule
+	for _, rule := range securityList.EgressSecurityRules {
+		if rule.Description != nil &&
+			strings.HasPrefix(*rule.Description, descriptionPrefix) {
+			continue
+		}
+		updatedEgressRules = append(updatedEgressRules, rule)
+	}
+
+	if len(updatedIngressRules) == len(securityList.IngressSecurityRules) &&
+		len(updatedEgressRules) == len(securityList.EgressSecurityRules) {
+		return nil // no rules were removed
+	}
+
+	_, err := m.vcnClient.UpdateSecurityList(context.Background(), core.UpdateSecurityListRequest{
+		SecurityListId: securityList.Id,
+		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+			IngressSecurityRules: updatedIngressRules,
+			EgressSecurityRules:  updatedEgressRules,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update security list: %w", err)
+	}
+
+	return nil
+}
+
+// GetWireguardService returns the wireguard service for a given wireguard instance
+func GetWireguardService(
+	apiClient *http.Client,
+	apiEndpoint string,
+	encryptionKey string,
+	wireguardInstance *v0.WireguardInstance,
+) (*unstructured.Unstructured, error) {
+	// get kubernetes runtime instance
+	kubernetesRuntimeInstance, err := GetWireguardKubernetesRuntimeInstance(
+		apiClient,
+		apiEndpoint,
+		wireguardInstance,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes runtime instance: %w", err)
+	}
+
+	// get wireguard service
+	kubeClient, _, err := kube.GetClient(
+		kubernetesRuntimeInstance,
+		false,
+		apiClient,
+		apiEndpoint,
+		encryptionKey,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes client: %w", err)
+	}
+
+	// list loadbalancer services
+	serviceList, err := kubeClient.Resource(
+		schema.GroupVersionResource{
+			Group:    "",
+			Version:  "v1",
+			Resource: "services",
+		},
+	).Namespace(*wireguardInstance.Name).List(
+		context.Background(),
+		metav1.ListOptions{
+			FieldSelector: "spec.type=LoadBalancer",
+		},
+	)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("failed to list services: %w", err)
+	case len(serviceList.Items) == 0:
+		return nil, fmt.Errorf("failed to find wireguard service of type loadbalancer")
+	case len(serviceList.Items) > 1:
+		return nil, fmt.Errorf("found multiple wireguard services of type loadbalancer")
+	}
+
+	// return service
+	return &serviceList.Items[0], nil
+}
+
+// GetWireguardKubernetesRuntimeInstance returns the kubernetes runtime
+// instance for a given wireguard instance
+func GetWireguardKubernetesRuntimeInstance(
+	apiClient *http.Client,
+	apiEndpoint string,
+	wireguardInstance *v0.WireguardInstance,
+) (*tpapi.KubernetesRuntimeInstance, error) {
+
+	// get runtime instance id
+	kubernetesRuntimeInstanceId, err := tpclient.GetObjectIdByAttachedObject(
+		apiClient,
+		apiEndpoint,
+		tpapi.ObjectTypeKubernetesRuntimeInstance,
+		v0.ObjectTypeWireguardInstance,
+		*wireguardInstance.ID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes runtime instance by attachment: %w", err)
+	}
+
+	// get runtime instance
+	kubernetesRuntimeInstance, err := tpclient.GetKubernetesRuntimeInstanceByID(
+		apiClient,
+		apiEndpoint,
+		*kubernetesRuntimeInstanceId,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes runtime instance: %w", err)
+	}
+
+	return kubernetesRuntimeInstance, nil
 }

@@ -3,9 +3,17 @@
 package wireguard
 
 import (
+	"errors"
+	"fmt"
+
 	logr "github.com/go-logr/logr"
 	v0 "github.com/randalljohnson/wireguard-threeport-module/pkg/api/v0"
+	tpapi_v0 "github.com/threeport/threeport/pkg/api/v0"
+	tpclient_lib "github.com/threeport/threeport/pkg/client/lib/v0"
+	tpclient_v0 "github.com/threeport/threeport/pkg/client/v0"
 	controller "github.com/threeport/threeport/pkg/controller/v0"
+	util "github.com/threeport/threeport/pkg/util/v0"
+	"gopkg.in/yaml.v3"
 )
 
 // v0WireguardDefinitionCreated performs reconciliation when a v0 WireguardDefinition
@@ -15,9 +23,39 @@ func v0WireguardDefinitionCreated(
 	wireguardDefinition *v0.WireguardDefinition,
 	log *logr.Logger,
 ) (int64, error) {
+	// marshal Helm values to YAML
+	values, err := getHelmValues()
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	}
+	valuesYAML, err := yaml.Marshal(values)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	}
+	valuesStr := string(valuesYAML)
+
+	// create HelmWorkloadDefinition for wg-portal chart
+	helmWorkloadDef := &tpapi_v0.HelmWorkloadDefinition{
+		Definition: tpapi_v0.Definition{
+			Name: wireguardDefinition.Name,
+		},
+		Repo:           util.Ptr("oci://ghcr.io/h44z/charts/wg-portal"),
+		Chart:          util.Ptr(""),
+		ChartVersion:   util.Ptr(""),
+		ValuesDocument: &valuesStr,
+	}
+
+	// create HelmWorkloadDefinition
+	createdDef, err := tpclient_v0.CreateHelmWorkloadDefinition(r.APIClient, r.APIServer, helmWorkloadDef)
+	if err != nil && !errors.Is(err, tpclient_lib.ErrConflict) {
+		return 0, fmt.Errorf("failed to create HelmWorkloadDefinition: %w", err)
+	}
+
+	log.Info("created HelmWorkloadDefinition", "name", createdDef.Name)
 	return 0, nil
 }
 
+// TODO: implement with support for updating configuration without changing wireguard keys
 // v0WireguardDefinitionUpdated performs reconciliation when a v0 WireguardDefinition
 // has been updated.
 func v0WireguardDefinitionUpdated(
@@ -25,6 +63,36 @@ func v0WireguardDefinitionUpdated(
 	wireguardDefinition *v0.WireguardDefinition,
 	log *logr.Logger,
 ) (int64, error) {
+	// // marshal Helm values to YAML
+	// values, err := getHelmValues()
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	// }
+	// valuesYAML, err := yaml.Marshal(values)
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to marshal Helm values: %w", err)
+	// }
+	// valuesStr := string(valuesYAML)
+
+	// // get associated HelmWorkloadDefinition by name
+	// helmWorkloadDef, err := tpclient_v0.GetHelmWorkloadDefinitionByName(r.APIClient, r.APIServer, *wireguardDefinition.Name)
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to get HelmWorkloadDefinition: %w", err)
+	// }
+
+	// // update HelmWorkloadDefinition
+	// helmWorkloadDef.Repo = util.Ptr("oci://ghcr.io/h44z/charts/wg-portal")
+	// helmWorkloadDef.Chart = util.Ptr("")
+	// helmWorkloadDef.ChartVersion = util.Ptr("")
+	// helmWorkloadDef.ValuesDocument = &valuesStr
+
+	// // update HelmWorkloadDefinition
+	// updatedDef, err := tpclient_v0.UpdateHelmWorkloadDefinition(r.APIClient, r.APIServer, helmWorkloadDef)
+	// if err != nil {
+	// 	return 0, fmt.Errorf("failed to update HelmWorkloadDefinition: %w", err)
+	// }
+
+	// log.Info("updated HelmWorkloadDefinition", "name", updatedDef.Name)
 	return 0, nil
 }
 
@@ -35,5 +103,18 @@ func v0WireguardDefinitionDeleted(
 	wireguardDefinition *v0.WireguardDefinition,
 	log *logr.Logger,
 ) (int64, error) {
+	// get associated HelmWorkloadDefinition by name
+	helmWorkloadDef, err := tpclient_v0.GetHelmWorkloadDefinitionByName(r.APIClient, r.APIServer, *wireguardDefinition.Name)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get HelmWorkloadDefinition: %w", err)
+	}
+
+	// delete HelmWorkloadDefinition
+	_, err = tpclient_v0.DeleteHelmWorkloadDefinition(r.APIClient, r.APIServer, *helmWorkloadDef.ID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete HelmWorkloadDefinition: %w", err)
+	}
+
+	log.Info("deleted HelmWorkloadDefinition", "name", helmWorkloadDef.Name)
 	return 0, nil
 }
